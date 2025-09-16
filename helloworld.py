@@ -8,7 +8,7 @@ mesh = o3d.io.read_triangle_mesh(mesh_path)
 # mesh.compute_vertex_normals()
 
 
-# OPTIONAL: Get basic mesh features.
+# OPTIONAL: Get basic mesh features
 vertices = np.asarray(mesh.vertices)
 triangles = np.asarray(mesh.triangles)
 
