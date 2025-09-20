@@ -4,11 +4,11 @@ from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QLi
 from vedo import Plotter, load, Box
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
-# Define the root directory for the shape database using an absolute path for reliability
+# Define the directory
 SHAPEDATA_ROOT = os.path.abspath('ShapeDatabase_INFOMR-master/ShapeDatabase_INFOMR-master')
 
 
-# This function parses an OBJ file to get information like vertex count, face count, and bounding box.
+# This function get information like vertex count, face count, and bounding box.
 def parse_obj_info(filepath):
     vertices = []
     faces = []
@@ -17,17 +17,17 @@ def parse_obj_info(filepath):
     with open(filepath, 'r') as f:
         for line in f:
             if line.startswith('v '):
-                # 'v' stands for vertex. Parse the coordinates.
+                # 'v' for vertex
                 parts = line.strip().split()
                 if len(parts) == 4:
                     vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
             elif line.startswith('f '):
-                # 'f' stands for face. Store the vertex indices for the face.
+                # 'f' for face
                 parts = line.strip().split()
                 faces.append(parts[1:])
 
     if faces:
-        # Determine the face type (e.g., "3-gon" for triangles, "4-gon" for quads)
+        # Determine the face type
         face_type = f"{len(faces[0])}-gon"
 
     bbox = "N/A"
@@ -39,18 +39,18 @@ def parse_obj_info(filepath):
     return len(vertices), len(faces), face_type, bbox
 
 
-# The main application window for the file explorer and 3D viewer.
+# The main application window for the 3D viewer.
 class FileExplorer(QWidget):
     def __init__(self, root_folder):
         super().__init__()
         self.root_folder = root_folder
         self.current_mesh = None  # Holds the currently loaded 3D model
-        self.bbox_actor = None  # Holds the bounding box actor for easy removal
+        self.bbox_actor = None  # Holds the bounding box
 
-        # Set up the main horizontal layout for the entire window
+        # Set up the layout for the entire window
         main_layout = QHBoxLayout(self)
 
-        # This function creates a panel with a label and a list widget, and connects the list's click event
+        # This function creates a panel
         def create_list_panel(label_text, click_handler):
             list_widget = QListWidget()
             list_widget.itemClicked.connect(click_handler)
@@ -73,32 +73,32 @@ class FileExplorer(QWidget):
         viewer_panel = QVBoxLayout()
         viewer_panel.addWidget(QLabel("3D Viewer"))
 
-        # This widget is the canvas where the 3D model will be drawn
+        # This widget is where the 3D model will be drawn
         self.viewer_widget = QVTKRenderWindowInteractor(self)
-        # The vedo plotter is used to handle 3D rendering
+        # The vedo plotter for 3D rendering
         self.plotter = Plotter(qt_widget=self.viewer_widget)
         viewer_panel.addWidget(self.viewer_widget)
 
-        # This label displays information about the loaded 3D model
+        # This displays information about the 3D model
         self.info_label = QLabel("Select a file to see info.")
         viewer_panel.addWidget(self.info_label)
 
-        # This checkbox will be used to show or hide the bounding box
+        # This checkbox will show or hide the bounding box
         self.bbox_toggle = QCheckBox("Show Bounding Box")
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
         viewer_panel.addWidget(self.bbox_toggle)
 
-        # Add the viewer panel to the main layout
+        # Add the view panel to the main layout
         main_layout.addLayout(viewer_panel)
 
-    # This function is called when a category in the left list is clicked
+    # This function is called when a category is clicked
     def on_category_selected(self, item):
         self.file_list.clear()  # Clear the previous files
         category_path = os.path.join(self.root_folder, item.text())
         files = [f for f in os.listdir(category_path) if f.endswith('.obj')]
         self.file_list.addItems(files)  # Populate the file list with .obj files
 
-    # This function is called when a file in the middle list is clicked
+    # This function is called when a file is clicked
     def on_file_selected(self, item):
         # Get the full path to the selected OBJ file
         selected_category = self.category_list.currentItem().text()
@@ -124,7 +124,7 @@ class FileExplorer(QWidget):
     def on_bbox_toggle(self, state):
         if self.current_mesh:
             if state:  # If the box is checked
-                # Create a vedo Box actor that outlines the loaded mesh
+                # Create a Box actor that outlines the loaded mesh
                 self.bbox_actor = Box(self.current_mesh.bounds()).wireframe().c('red')
                 self.plotter.add(self.bbox_actor)  # Add the box to the viewer
             else:  # If the box is unchecked
