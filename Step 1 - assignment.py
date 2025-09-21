@@ -26,9 +26,18 @@ def parse_obj_info(filepath):
                 parts = line.strip().split()
                 faces.append(parts[1:])
 
-    if faces:
-        # Determine the face type
-        face_type = f"{len(faces[0])}-gon"
+
+    face_types = set()
+    for face in faces:
+        count = len(face)
+        if count == 3:
+            face_types.add("triangles")
+        elif count == 4:
+            face_types.add("quads")
+        else:
+            face_types.add("other")
+    face_type = " and ".join(sorted(face_types)) if face_types else "unknown"
+
 
     bbox = "N/A"
     if vertices:
