@@ -4,10 +4,10 @@ import pymeshlab as ml
 
 # ----- Instellingen -----
 input_folder = "ShapeDatabase_INFOMR-master/ShapeDatabase_INFOMR-master"  # originele map
-output_folder = "copy5001/copy5001"  # nieuwe map voor kopieën
+output_folder = "copy5000"  # nieuwe map voor kopieën
 
 TARGET_VERTS = 5000
-TOLERANCE = 100
+TOLERANCE = 500
 MAX_ITERS = 12
 
 # ----- Functie -----
@@ -55,8 +55,10 @@ def remeshObject(input_file, output_file_copy):
         ms.save_current_mesh(output_file_copy)
         final_v, _ = verts_faces()
         print(f"{output_file_copy}: final vertices: {final_v}")
+        print(" ")
     except ml.PyMeshLabException as e:
         print(f"Kan mesh niet opslaan: {e}")
+        print(" ")
 
 # remeshObject("m1345.obj", "test.obj")
 
