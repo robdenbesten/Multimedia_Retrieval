@@ -1,110 +1,140 @@
-import os
 import sys
-import vedo
+import os
+from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QLabel, QCheckBox, QComboBox
+from vedo import Plotter, load, Box
+from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
+# Define the parent directory containing main folders
+SHAPEDATA_PARENT = os.path.abspath('ShapeDatabase_INFOMR-master')
 
-class MeshViewer:
-    """
-    A simple 3D mesh viewer using the vedo library.
-    It allows users to cycle through a directory of .obj files,
-    and toggle wireframe mode using keyboard controls.
-    """
+class FileExplorer(QWidget):
+    def __init__(self, parent_folder):
+        super().__init__()
+        self.parent_folder = parent_folder
+        self.current_main_folder = None
+        self.current_mesh = None
+        self.bbox_actor = None
 
-    def __init__(self, folder_path):
-        """
-        Initializes the viewer, finds all .obj files in the specified folder,
-        and sets up the vedo plotter.
+        main_layout = QHBoxLayout(self)
 
-        Args:
-            folder_path (str): The path to the directory containing .obj files.
-        """
-        self.obj_files = self._find_obj_files(folder_path)
-        if not self.obj_files:
-            print(f"Error: No .obj files found in '{folder_path}'.")
-            sys.exit(1)
+        # Main folder selection box
+        left_panel = QVBoxLayout()
+        left_panel.addWidget(QLabel("Main Folder"))
+        self.main_folder_combo = QComboBox()
+        self.main_folders = [d for d in os.listdir(parent_folder) if os.path.isdir(os.path.join(parent_folder, d))]
+        self.main_folder_combo.addItems(self.main_folders)
+        self.main_folder_combo.currentTextChanged.connect(self.on_main_folder_changed)
+        left_panel.addWidget(self.main_folder_combo)
 
-        self.current_idx = 0
-        self.wireframe_mode = False
-        self.plotter = vedo.Plotter(interactive=True)
+        # Categories panel
+        self.category_list, category_panel = self.create_list_panel("Categories", self.on_category_selected)
+        left_panel.addLayout(category_panel)
 
-        # Load the initial mesh and display it
-        self.current_mesh = self._load_mesh()
-        self.plotter.show(self.current_mesh, interactive=False)
+        # Files panel
+        self.file_list, file_panel = self.create_list_panel("Files", self.on_file_selected)
+        left_panel.addLayout(file_panel)
 
-        # Add keyboard callbacks for user interaction
-        self.plotter.add_callback('key press', self._on_key_press)
+        main_layout.addLayout(left_panel)
 
-    def _find_obj_files(self, folder_path):
-        """
-        Walks through a directory and its subdirectories to find all .obj files.
-        """
-        obj_files = []
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                if file.lower().endswith('.obj'):
-                    obj_files.append(os.path.join(root, file))
-        obj_files.sort()
-        return obj_files
+        # 3D viewer panel
+        viewer_panel = QVBoxLayout()
+        viewer_panel.addWidget(QLabel("3D Viewer"))
+        self.viewer_widget = QVTKRenderWindowInteractor(self)
+        self.plotter = Plotter(qt_widget=self.viewer_widget)
+        viewer_panel.addWidget(self.viewer_widget)
+        self.info_label = QLabel("Select a file to see info.")
+        viewer_panel.addWidget(self.info_label)
+        self.bbox_toggle = QCheckBox("Show Bounding Box")
+        self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
+        viewer_panel.addWidget(self.bbox_toggle)
+        main_layout.addLayout(viewer_panel)
 
-    def _load_mesh(self):
-        """
-        Loads the .obj file at the current index and returns a vedo.Mesh object.
-        """
-        mesh_path = self.obj_files[self.current_idx]
-        print(f"Loading mesh: {os.path.basename(mesh_path)}")
-        return vedo.load(mesh_path)
+        # Initialize with the first main folder
+        if self.main_folders:
+            self.on_main_folder_changed(self.main_folders[0])
 
-    def _switch_mesh(self, direction):
-        """
-        Switches to the next or previous mesh based on the direction.
-        """
-        num_files = len(self.obj_files)
-        self.current_idx = (self.current_idx + direction) % num_files
+    def create_list_panel(self, label_text, click_handler):
+        list_widget = QListWidget()
+        list_widget.itemClicked.connect(click_handler)
+        panel = QVBoxLayout()
+        panel.addWidget(QLabel(label_text))
+        panel.addWidget(list_widget)
+        return list_widget, panel
 
-        new_mesh = self._load_mesh()
+    def on_main_folder_changed(self, folder_name):
+        self.current_main_folder = os.path.join(self.parent_folder, folder_name)
+        self.category_list.clear()
+        categories = [d for d in os.listdir(self.current_main_folder) if os.path.isdir(os.path.join(self.current_main_folder, d))]
+        self.category_list.addItems(categories)
+        self.file_list.clear()
 
-        # Apply the current wireframe state to the new mesh
-        if self.wireframe_mode:
-            new_mesh.wireframe()
+    def on_category_selected(self, item):
+        self.file_list.clear()
+        category_path = os.path.join(self.current_main_folder, item.text())
+        files = [f for f in os.listdir(category_path) if f.endswith('.obj')]
+        self.file_list.addItems(files)
 
-        # Clear the old mesh and show the new one
-        self.plotter.clear()
-        self.plotter.add(new_mesh)
-        self.plotter.render()
+    def on_file_selected(self, item):
+        selected_category = self.category_list.currentItem().text()
+        full_path = os.path.join(self.current_main_folder, selected_category, item.text())
+        if os.path.exists(full_path):
+            self.plotter.clear()
+            self.current_mesh = load(full_path)
+            self.plotter.show(self.current_mesh, resetcam=True)
+            v_count, f_count, f_type, bbox = parse_obj_info(full_path)
+            info = f"Vertices: {v_count}\nFaces: {f_count}\nFace type: {f_type}\nBounding box: {bbox}"
+            self.info_label.setText(info)
+            self.bbox_toggle.setChecked(False)
+            if self.bbox_actor:
+                self.plotter.remove(self.bbox_actor)
+                self.bbox_actor = None
 
-    def _toggle_wireframe(self):
-        """
-        Toggles the wireframe mode for the current mesh.
-        """
-        self.wireframe_mode = not self.wireframe_mode
-
-        # Ensure the actor is a vedo.Mesh before calling its wireframe method
-        current_actor = self.plotter.actors[0]
-        if isinstance(current_actor, vedo.Mesh):
-            current_actor.wireframe(self.wireframe_mode)
+    def on_bbox_toggle(self, state):
+        if self.current_mesh:
+            if state:
+                self.bbox_actor = Box(self.current_mesh.bounds()).wireframe().c('red')
+                self.plotter.add(self.bbox_actor)
+            else:
+                if self.bbox_actor:
+                    self.plotter.remove(self.bbox_actor)
+                    self.bbox_actor = None
             self.plotter.render()
 
-    def _on_key_press(self, event):
-        """
-        Callback function for keyboard events.
-        """
-        if event.keypress == 'Right':
-            self._switch_mesh(1)
-        elif event.keypress == 'Left':
-            self._switch_mesh(-1)
-        elif event.keypress.lower() == 'w':
-            self._toggle_wireframe()
+def parse_obj_info(filepath):
+    vertices = []
+    faces = []
+    face_type = "N/A"
+    with open(filepath, 'r') as f:
+        for line in f:
+            if line.startswith('v '):
+                parts = line.strip().split()
+                if len(parts) == 4:
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+            elif line.startswith('f '):
+                parts = line.strip().split()
+                faces.append(parts[1:])
+    face_types = set()
+    for face in faces:
+        count = len(face)
+        if count == 3:
+            face_types.add("triangles")
+        elif count == 4:
+            face_types.add("quads")
+        else:
+            face_types.add("other")
+    face_type = " and ".join(sorted(face_types)) if face_types else "unknown"
+    bbox = "N/A"
+    if vertices:
+        xs, ys, zs = zip(*vertices)
+        bbox = f"X:[{min(xs):.2f}, {max(xs):.2f}] Y:[{min(ys):.2f}, {max(ys):.2f}] Z:[{min(zs):.2f}, {max(zs):.2f}]"
+    return len(vertices), len(faces), face_type, bbox
 
-    def run(self):
-        """
-        Starts the interactive vedo plotter.
-        """
-        self.plotter.interactive().close()
-
-
-# Main execution block
-if __name__ == "__main__":
-    # Create an instance of the viewer and run it
-    # Replace 'ShapeDatabase_INFOMR-master' with the path to your folder
-    viewer = MeshViewer('ShapeDatabase_INFOMR-master')
-    viewer.run()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = QWidget()
+    window.setWindowTitle("3D Viewer")
+    window.resize(1200, 600)
+    layout = QHBoxLayout(window)
+    layout.addWidget(FileExplorer(SHAPEDATA_PARENT))
+    window.show()
+    sys.exit(app.exec())
