@@ -84,6 +84,35 @@ def main():
     print(f"Average vertices: {df['vertices'].mean():.2f}")
     print(f"Average faces: {df['faces'].mean():.2f}")
 
+    # Identify outliers using IQR
+    if not df.empty:
+        q1_v, q3_v = df['vertices'].quantile([0.25, 0.75])
+        iqr_v = q3_v - q1_v
+        outlier_low_v = q1_v - 1.5 * iqr_v
+        outlier_high_v = q3_v + 1.5 * iqr_v
+        print(f"IQR for vertices: {iqr_v:.2f}")
+        print(f"Lower Outlier Fence: {outlier_low_v:.2f}")
+        print(f"Upper Outlier Fence: {outlier_high_v:.2f}")
+
+        vertex_outliers = df[(df['vertices'] < outlier_low_v) | (df['vertices'] > outlier_high_v)]
+        if not vertex_outliers.empty:
+            print(f"\nSignificant outliers in vertex count found:")
+            print(vertex_outliers[['filename', 'vertices', 'faces']].to_string(index=False))
+
+        q1_f, q3_f = df['faces'].quantile([0.25, 0.75])
+        iqr_f = q3_f - q1_f
+        outlier_low_f = q1_f - 1.5 * iqr_f
+        outlier_high_f = q3_f + 1.5 * iqr_f
+        print(f"IQR for faces: {iqr_f:.2f}")
+        print(f"Lower Outlier Fence: {outlier_low_f:.2f}")
+        print(f"Upper Outlier Fence: {outlier_high_f:.2f}")
+
+        face_outliers = df[(df['faces'] < outlier_low_f) | (df['faces'] > outlier_high_f)]
+        if not face_outliers.empty:
+            print(f"\nSignificant outliers in face count found:")
+            print(face_outliers[['filename', 'vertices', 'faces']].to_string(index=False))
+
+
     # Plot histograms
     plt.figure(figsize=(15, 5))
     plt.subplot(1, 2, 1)
