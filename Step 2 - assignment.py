@@ -64,7 +64,7 @@ def find_obj_files(folder_path):
 
 # Main analysis and plotting
 def main():
-    folder_name = 'ShapeDatabase_INFOMR-master'
+    folder_name = 'ShapeDatabase_INFOMR-master/Original Database'
     if not os.path.isdir(folder_name):
         print(f"Folder '{folder_name}' not found.")
         return
@@ -97,7 +97,7 @@ def main():
         vertex_outliers = df[(df['vertices'] < outlier_low_v) | (df['vertices'] > outlier_high_v)]
         if not vertex_outliers.empty:
             print(f"\nSignificant outliers in vertex count found:")
-            print(vertex_outliers[['filename', 'vertices', 'faces']].to_string(index=False))
+            print(vertex_outliers[['filename', 'class',  'vertices', 'faces']].to_string(index=False))
 
         q1_f, q3_f = df['faces'].quantile([0.25, 0.75])
         iqr_f = q3_f - q1_f
@@ -110,8 +110,20 @@ def main():
         face_outliers = df[(df['faces'] < outlier_low_f) | (df['faces'] > outlier_high_f)]
         if not face_outliers.empty:
             print(f"\nSignificant outliers in face count found:")
-            print(face_outliers[['filename', 'vertices', 'faces']].to_string(index=False))
+            print(face_outliers[['filename', 'class',  'vertices', 'faces']].to_string(index=False))
 
+        num_vertex_outliers = len(vertex_outliers)
+        if num_vertex_outliers:
+            print(f"\nSignificant outliers in vertex count found: {num_vertex_outliers}")
+            print(vertex_outliers[['filename', 'class', 'vertices', 'faces']].to_string(index=False))
+
+        num_face_outliers = len(face_outliers)
+        if num_face_outliers:
+            print(f"\nSignificant outliers in face count found: {num_face_outliers}")
+            print(face_outliers[['filename', 'class', 'vertices', 'faces']].to_string(index=False))
+
+        combined_outliers = pd.concat([vertex_outliers, face_outliers]).drop_duplicates(subset=['filename'])
+        print(f"\nTotal unique files flagged as outliers: {len(combined_outliers)}")
 
     # Plot histograms
     plt.figure(figsize=(15, 5))
