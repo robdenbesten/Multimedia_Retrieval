@@ -6,61 +6,68 @@ import pymeshlab as ml
 input_folder = "ShapeDatabase_INFOMR-master/ShapeDatabase_INFOMR-master"  # originele map
 output_folder = "copy5000"  # nieuwe map voor kopieën
 
-TARGET_VERTS = 5000
-TOLERANCE = 500
-MAX_ITERS = 12
+TARGET_VERTICES = 5000
+Error = False
 
 # ----- Functie -----
 def remeshObject(input_file, output_file_copy):
     ms = ml.MeshSet()
     ms.load_new_mesh(input_file)
 
-    def verts_faces():
-        mesh = ms.current_mesh()
-        return mesh.vertex_number(), mesh.face_number()
+    def decreaseVertices():
+        try:
+            print(f"Too many vertices, current number: {ms.current_mesh().vertex_number()} (f {ms.current_mesh().face_number()})")
+            estimated_amount_faces = int(ms.current_mesh().face_number() * (TARGET_VERTICES / ms.current_mesh().vertex_number()))
+            ms.apply_filter(
+                "meshing_decimation_quadric_edge_collapse",
+                targetfacenum=estimated_amount_faces,
+                qualitythr=0.5,
+                preservenormal=True,
+                preserveboundary=True,
+                preservetopology=True,
+                optimalplacement=True,
+                autoclean=True
+            )
+            return True  # success
+        except ml.PyMeshLabException as e:
+            print(f"Error with Quadratic Edge Collapse Decimation: vertices {ms.current_mesh().vertex_number()} ({e})")
+            return False  # failure
 
-    for it in range(1, MAX_ITERS + 1):
-        cur_v, cur_f = verts_faces()
+    def increaseVertices():
+        try:
+            print(f"Too little vertices, current number: {ms.current_mesh().vertex_number()}")
+            ms.apply_filter(
+                "meshing_surface_subdivision_midpoint",
+                iterations=1
+            )
+            return True  # success
+        except ml.PyMeshLabException as e:
+            print(f"Error with Surface Subdivision Midpoint: vertices {ms.current_mesh().vertex_number()} ({e})")
+            return False  # failure
 
-        # Stop als binnen tolerantie
-        if abs(cur_v - TARGET_VERTS) <= TOLERANCE:
-            break
+    # Remeshing logic
+    if ms.current_mesh().vertex_number() > TARGET_VERTICES:
+        decreaseVertices()
+    else:
+        while ms.current_mesh().vertex_number() < TARGET_VERTICES:
+            success = increaseVertices()
+            if not success:
+                print("Subdivision failed, skipping further attempts.")
+                break
+        decreaseVertices()
 
-        # Te weinig vertices -> refine
-        if cur_v < TARGET_VERTS:
-            try:
-                print(f"Te weinig vertices: {cur_v}")
-                ms.apply_filter("meshing_surface_subdivision_loop", iterations=1)
-            except ml.PyMeshLabException as e:
-                print(f"Iter {it}: Kan subdivide niet toepassen ({e}), overslaan")
-                break  # optioneel: stop subdivide als het niet kan
-        # Te veel vertices -> decimeer
-        else:
-            est_target_faces = max(4, int(cur_f * (TARGET_VERTS / cur_v))) if cur_v > 0 else TARGET_VERTS
-            try:
-                print(f"Te veel vertices: {cur_v}")
-                ms.apply_filter(
-                    "meshing_decimation_quadric_edge_collapse",
-                    targetfacenum=est_target_faces,
-                    preservenormal=True,
-                    preserveboundary=True,
-                    optimalplacement=True
-                )
-            except ml.PyMeshLabException as e:
-                print(f"Iter {it}: Kan decimeer niet toepassen ({e}), overslaan")
-                break  # stop decimeer als het niet kan
-
-    # Sla het resultaat op
+    # Save the result
     try:
         ms.save_current_mesh(output_file_copy)
-        final_v, _ = verts_faces()
-        print(f"{output_file_copy}: final vertices: {final_v}")
+        print(f"{output_file_copy}: final vertices: {ms.current_mesh().vertex_number()}")
         print(" ")
     except ml.PyMeshLabException as e:
-        print(f"Kan mesh niet opslaan: {e}")
+        print(f"Could not save mesh: {e}")
         print(" ")
 
-# remeshObject("m1345.obj", "test.obj")
+
+# remeshObject("D00921.obj", "test.obj")
+
 
 # ----- Loop door alle bestanden -----
 for root, dirs, files in os.walk(input_folder):
@@ -80,6 +87,13 @@ for root, dirs, files in os.walk(input_folder):
             # --- Pas mesh aan en sla op als _copy.obj ---
             name, ext = os.path.splitext(file)
             output_file_copy = os.path.join(output_path, f"{name}_copy{ext}")
-            remeshObject(input_file, output_file_copy)
+
+            # Wrap the remeshObject call in try-except to skip errors
+            try:
+                remeshObject(input_file, output_file_copy)
+            except Exception as e:
+                print(f"Skipping {file} due to error: {e}")
+                print(" ")
+
 
 print("Klaar! Alle bestanden gekopieerd en aangepaste kopieën aangemaakt.")
