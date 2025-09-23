@@ -3,21 +3,32 @@ import shutil
 import pymeshlab as ml
 
 # ----- Instellingen -----
-input_folder = "ShapeDatabase_INFOMR-master/Original Database"  # originele map
-output_folder = "copy5000"  # nieuwe map voor kopieën
+input_folder = "ShapeDatabase_INFOMR-master/Original Database/PlantIndoors"  # originele map
+output_folder = "copy5000/copy5000/plant"  # nieuwe map voor kopieën
 
 TARGET_VERTICES = 5000
 Error = False
 
 # ----- Functie -----
 def remeshObject(input_file, output_file_copy):
+    global success
     ms = ml.MeshSet()
     ms.load_new_mesh(input_file)
+
+    # Clean mesh to ensure manifoldness
+    ms.apply_filter("meshing_remove_duplicate_faces")
+    ms.apply_filter("meshing_remove_duplicate_vertices")
+    ms.apply_filter("meshing_remove_unreferenced_vertices")
+    ms.apply_filter("meshing_remove_null_faces")
+    ms.apply_filter("meshing_repair_non_manifold_edges")
+    ms.apply_filter("meshing_repair_non_manifold_vertices")
+    # ms.apply_filter("meshing_close_holes", maxholesize=10)  # Optional: try to close small holes
 
     def decreaseVertices():
         try:
             print(f"Too many vertices, current number: {ms.current_mesh().vertex_number()} (f {ms.current_mesh().face_number()})")
             estimated_amount_faces = int(ms.current_mesh().face_number() * (TARGET_VERTICES / ms.current_mesh().vertex_number()))
+            print(estimated_amount_faces)
             ms.apply_filter(
                 "meshing_decimation_quadric_edge_collapse",
                 targetfacenum=estimated_amount_faces,
@@ -35,7 +46,7 @@ def remeshObject(input_file, output_file_copy):
 
     def increaseVertices():
         try:
-            print(f"Too little vertices, current number: {ms.current_mesh().vertex_number()}")
+            print(f"Too little vertices, current number: {ms.current_mesh().vertex_number()} (f {ms.current_mesh().face_number()})")
             ms.apply_filter(
                 "meshing_surface_subdivision_midpoint",
                 iterations=1
@@ -46,15 +57,29 @@ def remeshObject(input_file, output_file_copy):
             return False  # failure
 
     # Remeshing logic
-    if ms.current_mesh().vertex_number() > TARGET_VERTICES:
-        decreaseVertices()
-    else:
-        while ms.current_mesh().vertex_number() < TARGET_VERTICES:
+    if ms.current_mesh().vertex_number() < TARGET_VERTICES:
+        counter = 0
+        while (ms.current_mesh().vertex_number() < TARGET_VERTICES) & (counter < 10):
+            counter += 1
             success = increaseVertices()
             if not success:
                 print("Subdivision failed, skipping further attempts.")
                 break
-        decreaseVertices()
+        if success:
+            while (ms.current_mesh().vertex_number() > TARGET_VERTICES) & (counter < 10):
+                counter += 1
+                success = decreaseVertices()
+                if not success:
+                    print("Simplifying failed, skipping further attempts.")
+                    break
+    else:
+        counter = 0
+        while (ms.current_mesh().vertex_number() > TARGET_VERTICES) & (counter < 10):
+            counter += 1
+            success = decreaseVertices()
+            if not success:
+                print("Simplifying failed, skipping further attempts.")
+                break
 
     # Save the result
     try:
@@ -81,8 +106,8 @@ for root, dirs, files in os.walk(input_folder):
             input_file = os.path.join(root, file)
 
             # --- Kopieer origineel ---
-            output_file_original = os.path.join(output_path, file)
-            shutil.copy2(input_file, output_file_original)
+            # output_file_original = os.path.join(output_path, file)
+            # shutil.copy2(input_file, output_file_original)
 
             # --- Pas mesh aan en sla op als _copy.obj ---
             name, ext = os.path.splitext(file)
