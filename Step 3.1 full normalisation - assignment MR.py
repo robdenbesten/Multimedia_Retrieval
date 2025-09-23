@@ -1,7 +1,7 @@
 import trimesh
 import math
 import numpy as np
-
+###dot product eigenvector shape of the and x-axis it should be 1 or 1-
 def normalising_mesh(mesh):
     mesh = trimesh.load_mesh(mesh)
 
