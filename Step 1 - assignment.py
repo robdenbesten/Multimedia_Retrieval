@@ -1,7 +1,7 @@
 import sys
 import os
 from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QLabel, QCheckBox, QComboBox
-from vedo import Plotter, load, Box
+from vedo import Plotter, load, Box, Axes
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
 # Define the parent directory containing main folders
@@ -48,6 +48,12 @@ class FileExplorer(QWidget):
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
         viewer_panel.addWidget(self.bbox_toggle)
         main_layout.addLayout(viewer_panel)
+
+        #initialize axes toggle
+        self.axes_actor = None
+        self.axes_toggle = QCheckBox("Show Axes")
+        self.axes_toggle.stateChanged.connect(self.on_axes_toggle)
+        viewer_panel.addWidget(self.axes_toggle)
 
         # Initialize with the first main folder
         if self.main_folders:
@@ -99,6 +105,25 @@ class FileExplorer(QWidget):
                     self.plotter.remove(self.bbox_actor)
                     self.bbox_actor = None
             self.plotter.render()
+
+    def on_axes_toggle(self, state):
+        if self.current_mesh:
+            if state:
+                self.add_axes()
+            else:
+                if self.axes_actor:
+                    self.plotter.remove(self.axes_actor)
+                    self.axes_actor = None
+            self.plotter.render()
+
+    def add_axes(self):
+        if self.axes_actor:
+            self.plotter.remove(self.axes_actor)
+            self.axes_actor = None
+        if self.current_mesh is not None:
+            self.axes_actor = Axes(self.current_mesh, xtitle="X", ytitle="Y", ztitle="Z", c='k',
+                                   xlabel_size=0.04, ylabel_size=0.04, zlabel_size=0.04)
+            self.plotter.add(self.axes_actor)
 
 def parse_obj_info(filepath):
     vertices = []
