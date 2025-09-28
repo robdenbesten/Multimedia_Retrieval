@@ -8,7 +8,7 @@ original_mesh = trimesh.load('ShapeDatabase_INFOMR-master/Original Database/Fish
 # Create a working copy for modifications
 mesh = original_mesh.copy()
 
-# --- Pre-processing ---
+# --- Pre-processing ---, kijken of het ook zonder kan want ik ben hier geen fan  van.
 
 # Fill holes if not watertight
 if not mesh.is_watertight:
@@ -40,7 +40,7 @@ try:
 except Exception:
     convexity = np.nan
 
-# 3. Eccentricity (ratio of inertia tensor eigenvalues)
+# 3. Eccentricity (ratio of inertia tensor eigenvalues) --- > klopt nog niet denk ik
 moments = mesh.principal_inertia_components
 if moments[2] > 1e-6:  # Avoid division by zero for planar/linear shapes
     eccentricity = moments[0] / moments[2]
@@ -70,8 +70,8 @@ except ValueError:
 print(f"\n--- Mesh Properties ---")
 print(f"Mesh volume: {volume}")
 print(f"Surface area: {area}")
-print(f"Diameter (AABB diagonal): {diameter}")
-print(f"Compactness (wrt sphere): {compactness}")
+print(f"Diameter: {diameter}")
+print(f"Compactness: {compactness}")
 print(f"Rectangularity: {rectangularity}")
 print(f"Convexity: {convexity}")
 print(f"Eccentricity: {eccentricity}")
