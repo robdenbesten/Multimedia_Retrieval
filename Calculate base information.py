@@ -80,22 +80,29 @@ print(f"Eccentricity: {eccentricity}")
 
 
 
-# --- Edge Length Histogram ---
+# --- D2 Descriptor Histogram ---
 
-# Get unique edges as pairs of vertex indices
-edges = mesh.edges_unique
-
-# Get the vertex coordinates
+# Get vertex coordinates
 vertices = mesh.vertices
+n_vertices = len(vertices)
+n_samples = 10000  # Number of random pairs to sample
 
-# Compute edge lengths
-edge_lengths = np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)
+# Generate random indices for pairs of vertices
+rand_indices1 = np.random.randint(0, n_vertices, n_samples)
+rand_indices2 = np.random.randint(0, n_vertices, n_samples)
+
+# Get the vertex pairs
+p1 = vertices[rand_indices1]
+p2 = vertices[rand_indices2]
+
+# Compute the D2 distances
+d2_distances = np.linalg.norm(p1 - p2, axis=1)
 
 # Plot histogram
 plt.figure(figsize=(8, 5))
-plt.hist(edge_lengths, bins=30, color='skyblue', edgecolor='black')
-plt.title('Histogram of Edge Lengths')
-plt.xlabel('Edge Length')
+plt.hist(d2_distances, bins=25, color='skyblue', edgecolor='black')
+plt.title('Histogram of D2 (Distance Between 2 Random Vertices)')
+plt.xlabel('Distance')
 plt.ylabel('Frequency')
 plt.grid(True)
 plt.show()
