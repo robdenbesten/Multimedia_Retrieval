@@ -55,6 +55,20 @@ class FileExplorer(QWidget):
         self.axes_toggle.stateChanged.connect(self.on_axes_toggle)
         viewer_panel.addWidget(self.axes_toggle)
 
+        # Shades and wireframe options
+        self.shading_combo = QComboBox()
+        self.shading_combo.addItems(["Flat", "Smooth"])
+        self.shading_combo.currentTextChanged.connect(self.on_shading_changed)
+        viewer_panel.addWidget(QLabel("Shading"))
+        viewer_panel.addWidget(self.shading_combo)
+
+        self.wireframe_toggle = QCheckBox("Wireframe Overlay")
+        self.wireframe_toggle.stateChanged.connect(self.on_wireframe_toggle)
+        viewer_panel.addWidget(self.wireframe_toggle)
+
+        self.current_shading = "Flat"
+        self.show_wireframe = False
+
         # Initialize with the first main folder
         if self.main_folders:
             self.on_main_folder_changed(self.main_folders[0])
@@ -84,9 +98,8 @@ class FileExplorer(QWidget):
         selected_category = self.category_list.currentItem().text()
         full_path = os.path.join(self.current_main_folder, selected_category, item.text())
         if os.path.exists(full_path):
-            self.plotter.clear()
             self.current_mesh = load(full_path)
-            self.plotter.show(self.current_mesh, resetcam=True)
+            self.update_mesh_render()
             v_count, f_count, f_type, bbox = parse_obj_info(full_path)
             info = f"Vertices: {v_count}\nFaces: {f_count}\nFace type: {f_type}\nBounding box: {bbox}"
             self.info_label.setText(info)
@@ -124,6 +137,31 @@ class FileExplorer(QWidget):
             self.axes_actor = Axes(self.current_mesh, xtitle="X", ytitle="Y", ztitle="Z", c='k',
                                    xlabel_size=0.04, ylabel_size=0.04, zlabel_size=0.04)
             self.plotter.add(self.axes_actor)
+
+    def on_shading_changed(self, text):
+        self.current_shading = text
+        self.update_mesh_render()
+
+    def on_wireframe_toggle(self, state):
+        self.show_wireframe = bool(state)
+        self.update_mesh_render()
+
+    def update_mesh_render(self):
+        if self.current_mesh:
+            mesh = self.current_mesh.clone()
+            if self.current_shading == "Smooth":
+                mesh.compute_normals()  # Compute vertex normals for smooth shading
+            else:
+                mesh.flat()  # Flat shading
+            mesh.wireframe(self.show_wireframe)
+            self.plotter.clear()
+            self.plotter.show(mesh, resetcam=True)
+            # Re-add bbox/axes if needed
+            if self.bbox_toggle.isChecked() and self.bbox_actor:
+                self.plotter.add(self.bbox_actor)
+            if self.axes_toggle.isChecked() and self.axes_actor:
+                self.plotter.add(self.axes_actor)
+            self.plotter.render()
 
 def parse_obj_info(filepath):
     vertices = []
