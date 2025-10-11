@@ -64,7 +64,7 @@ def find_obj_files(folder_path):
 
 # Main analysis and plotting
 def main():
-    folder_name = 'ShapeDatabase_INFOMR-master/Original Database'
+    folder_name = 'copy5000/copy5000'
     if not os.path.isdir(folder_name):
         print(f"Folder '{folder_name}' not found.")
         return

@@ -1,10 +1,13 @@
 import os
 import shutil
 import pymeshlab as ml
+import time
+import gc
 
 # ----- Instellingen -----
-input_folder = "ShapeDatabase_INFOMR-master/Original Database/PlantIndoors"  # originele map
-output_folder = "copy5000/copy5000/plant"  # nieuwe map voor kopieën
+name = "Monitor"
+input_folder = f"ShapeDatabase_INFOMR-master/NogDoen"  # originele map
+output_folder = f"copy5000/copy5000"  # nieuwe map voor kopieën
 
 TARGET_VERTICES = 5000
 Error = False
@@ -120,5 +123,8 @@ for root, dirs, files in os.walk(input_folder):
                 print(f"Skipping {file} due to error: {e}")
                 print(" ")
 
+            # Add a small pause to let memory clear up
+            gc.collect()
+            time.sleep(0.1)  # try 0.5 seconds; increase to 1-2 if it still crashes
 
 print("Klaar! Alle bestanden gekopieerd en aangepaste kopieën aangemaakt.")
