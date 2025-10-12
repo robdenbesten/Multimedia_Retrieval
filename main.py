@@ -358,22 +358,25 @@ class CBSRApp(QWidget):
             self.on_category_changed(self.categories[0])
 
     def _create_origin_axes(self) -> None:
-        """Create origin axes (X=red, Y=green, Z=blue)."""
-        # X-axis: red line from (0,0,0) to (1,0,0)
-        x_axis = Line([0, 0, 0], [1, 0, 0]).c('red').lw(3)
+        """Create origin axes (X=red, Y=green, Z=blue) and unit cube."""
+        # X-axis: red line
+        x_axis = Line([0, 0, 0], [0.5, 0, 0]).c('red').lw(1)
         
-        # Y-axis: green line from (0,0,0) to (0,1,0)
-        y_axis = Line([0, 0, 0], [0, 1, 0]).c('green').lw(3)
+        # Y-axis: green line
+        y_axis = Line([0, 0, 0], [0, 0.5, 0]).c('green').lw(1)
         
-        # Z-axis: blue line from (0,0,0) to (0,0,1)
-        z_axis = Line([0, 0, 0], [0, 0, 1]).c('blue').lw(3)
+        # Z-axis: blue line
+        z_axis = Line([0, 0, 0], [0, 0, 0.5]).c('blue').lw(1)
         
-        # Combine all axes
-        self.origin_axes = [x_axis, y_axis, z_axis]
+        # Unit cube: wireframe cube with side length 1, centered at origin
+        unit_cube = Box(pos=[0.0, 0.0, 0.0], size=[1, 1, 1]).wireframe().c('gray').alpha(0.3)
         
-        # Add axes to plotter
-        for axis in self.origin_axes:
-            self.plotter.add(axis)
+        # Combine all reference objects
+        self.origin_axes = [x_axis, y_axis, z_axis, unit_cube]
+        
+        # Add reference objects to plotter
+        for obj in self.origin_axes:
+            self.plotter.add(obj)
 
     def _create_file_panel(self) -> QVBoxLayout:
         """Create file browser panel."""
@@ -415,7 +418,7 @@ class CBSRApp(QWidget):
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
         panel.addWidget(self.bbox_toggle)
 
-        self.clean_button = QPushButton("Clean (Remesh + Normalize)")
+        self.clean_button = QPushButton("Normalized")
         self.clean_button.clicked.connect(self.on_clean_clicked)
         panel.addWidget(self.clean_button)
         
@@ -442,7 +445,8 @@ class CBSRApp(QWidget):
         for axis in self.origin_axes:
             self.plotter.add(axis)
         
-        shape.mesh.wireframe(True)
+        # Display mesh with lighting enabled (like pressing 'L' key)
+        shape.mesh.lighting('default').linecolor('black').linewidth(1)
         self.plotter.show(shape.mesh, resetcam=True)
         self.current_mesh_actor = shape.mesh
 
@@ -507,10 +511,11 @@ class CBSRApp(QWidget):
             for axis in self.origin_axes:
                 self.plotter.add(axis)
             
-            shape.mesh.wireframe(True)
+            # Display cleaned mesh with lighting enabled (like pressing 'L' key)
+            shape.mesh.lighting('default').linecolor('black').linewidth(1)
             self.plotter.show(shape.mesh, resetcam=True)
             self.current_mesh_actor = shape.mesh
-            self.info_label.setText(f"✅ Cleaned successfully!\n"
+            self.info_label.setText(f"Cleaned successfully!\n"
                                    f"File: {os.path.basename(shape.file_path)}\n"
                                    f"Vertices: {shape.vertices}\nFaces: {shape.faces}")
             
