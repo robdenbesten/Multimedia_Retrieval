@@ -1,5 +1,5 @@
 """
-Compact 3D Shape Browser and Processing GUI v2
+Compact 3D Shape Browser and Processing GUI v3
 """
 import sys
 import os
@@ -146,7 +146,7 @@ def remesh_to_target_vertices(input_path: str, output_path: str) -> bool:
 
 
 def normalize_mesh(input_path: str, output_path: str) -> bool:
-    """Normalize mesh (center and scale to unit size) with robust error handling."""
+    """Normalize mesh (center, scale, align, and flip) with robust error handling."""
     if not os.path.exists(input_path):
         print(f"Input file not found for normalization: {input_path}")
         return False
@@ -177,7 +177,7 @@ def normalize_mesh(input_path: str, output_path: str) -> bool:
             print(f"Too few vertices in mesh {input_path}: {len(mesh.vertices)}")
             return False
         
-        # Center at origin
+        # Step 1: Center at origin
         try:
             centroid = mesh.centroid
             if not all(not math.isnan(x) and not math.isinf(x) for x in centroid):
@@ -188,7 +188,7 @@ def normalize_mesh(input_path: str, output_path: str) -> bool:
             print(f"Failed to center mesh {input_path}: {e}")
             return False
         
-        # Scale to unit size
+        # Step 2: Scale to unit size
         try:
             bounds = mesh.bounds
             if bounds is None or len(bounds) != 2:
@@ -207,11 +207,83 @@ def normalize_mesh(input_path: str, output_path: str) -> bool:
             print(f"Failed to scale mesh {input_path}: {e}")
             return False
         
+        # Step 3: Alignment using PCA
+        try:
+            import numpy as np
+            
+            # Calculate covariance matrix
+            covariance_matrix = np.cov(mesh.vertices.T)
+            
+            # Get eigenvalues and eigenvectors
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+            
+            # Sort eigenvectors by eigenvalues (largest first)
+            # This ensures largest eigenvector -> x-axis, second largest -> y-axis
+            sorted_indices = np.argsort(eigenvalues)[::-1]
+            sorted_eigenvalues = eigenvalues[sorted_indices]
+            sorted_eigenvectors = eigenvectors[:, sorted_indices]
+            
+            # Normalize eigenvectors (should already be normalized, but ensure it)
+            e1 = sorted_eigenvectors[:, 0] / np.linalg.norm(sorted_eigenvectors[:, 0])
+            e2 = sorted_eigenvectors[:, 1] / np.linalg.norm(sorted_eigenvectors[:, 1])
+            e3 = sorted_eigenvectors[:, 2] / np.linalg.norm(sorted_eigenvectors[:, 2])
+            
+            # Ensure right-handed coordinate system
+            if np.dot(e3, np.cross(e1, e2)) < 0:
+                e3 = -e3
+            
+            # Create rotation matrix: eigenvectors define the new coordinate system
+            # Each eigenvector becomes a column in the rotation matrix
+            rotation_matrix = np.column_stack([e1, e2, e3])
+            
+            # Transform vertices: new_vertices = vertices @ rotation_matrix
+            # This aligns the largest eigenvector with x-axis, second largest with y-axis
+            aligned_vertices = mesh.vertices @ rotation_matrix
+            
+            # Create aligned mesh
+            mesh = trimesh.Trimesh(vertices=aligned_vertices, faces=mesh.faces, process=False)
+            
+        except Exception as e:
+            print(f"Failed to align mesh {input_path}: {e}")
+            return False
+        
+        # Step 4: Flipping based on triangle center analysis
+        try:
+            # Calculate triangle centers
+            triangle_centers = mesh.vertices[mesh.faces].mean(axis=1)
+            
+            # Calculate flipping factors for each axis
+            flip_factors = []
+            for axis in [0, 1, 2]:  # x, y, z axes
+                # Sum of signed squared distances from origin
+                factor = np.sum(np.sign(triangle_centers[:, axis]) * (triangle_centers[:, axis] ** 2))
+                flip_factors.append(np.sign(factor))
+            
+            flip_factors = np.array(flip_factors)
+            
+            # Apply flipping to vertices
+            flipped_vertices = mesh.vertices.copy()
+            flipped_vertices[:, 0] *= flip_factors[0]
+            flipped_vertices[:, 1] *= flip_factors[1]
+            flipped_vertices[:, 2] *= flip_factors[2]
+            
+            # Handle face orientation if odd number of flips
+            faces = mesh.faces.copy()
+            if flip_factors[0] * flip_factors[1] * flip_factors[2] == -1:
+                faces = np.fliplr(faces)  # Flip face orientation
+            
+            # Create final mesh
+            mesh = trimesh.Trimesh(vertices=flipped_vertices, faces=faces, process=False)
+            
+        except Exception as e:
+            print(f"Failed to flip mesh {input_path}: {e}")
+            return False
+        
         # Save result
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             mesh.export(output_path)
-            print(f"Normalization completed for {os.path.basename(input_path)}")
+            print(f"Full normalization completed for {os.path.basename(input_path)}")
             return True
         except Exception as e:
             print(f"Failed to export normalized mesh {output_path}: {e}")
@@ -290,7 +362,7 @@ class Shape:
 
         try:
             name, ext = os.path.splitext(os.path.basename(self.file_path))
-            self.temp_copy_path = os.path.join(TEMP_REMESH_DIR, f"{name}_remesh{ext}")
+            self.temp_copy_path = os.path.join(TEMP_REMESH_DIR, f"{name}_processed{ext}")
             
             if remesh_to_target_vertices(self.file_path, self.temp_copy_path):
                 try:
@@ -308,18 +380,18 @@ class Shape:
             return False
 
     def normalize(self) -> bool:
-        """Normalize mesh (center and scale) and save to temp folder."""
-        if not os.path.exists(self.file_path):
-            print(f"File not found for normalization: {self.file_path}")
+        """Normalize mesh (center, scale, align, flip) in place on temp file."""
+        # Use the temp file if it exists (from remeshing), otherwise use original
+        input_path = self.temp_copy_path if self.temp_copy_path and os.path.exists(self.temp_copy_path) else self.file_path
+        
+        if not os.path.exists(input_path):
+            print(f"File not found for normalization: {input_path}")
             return False
 
         try:
-            name, ext = os.path.splitext(os.path.basename(self.file_path))
-            normalized_path = os.path.join(TEMP_REMESH_DIR, f"{name}_normalized{ext}")
-            
-            if normalize_mesh(self.file_path, normalized_path):
+            # Normalize in place - overwrite the temp file
+            if normalize_mesh(input_path, self.temp_copy_path):
                 try:
-                    self.temp_copy_path = normalized_path
                     self.mesh = load(self.temp_copy_path)
                     self.vertices, self.faces, _, _ = parse_obj_info(self.temp_copy_path)
                     return True
@@ -327,7 +399,7 @@ class Shape:
                     print(f"Failed to load normalized file: {e}")
                     return False
             else:
-                print(f"Normalization failed for {self.file_path}")
+                print(f"Normalization failed for {input_path}")
                 return False
         except Exception as e:
             print(f"Error during normalization: {e}")
@@ -344,6 +416,8 @@ class CBSRApp(QWidget):
         self.current_mesh_actor = None
         self.bbox_actor = None
         self.origin_axes = None
+        self.show_bbox_preference = False
+        self.show_reference_preference = True
 
         self.setWindowTitle("CBSR Debug GUI")
         self.resize(1200, 600)
@@ -369,7 +443,7 @@ class CBSRApp(QWidget):
         z_axis = Line([0, 0, 0], [0, 0, 0.5]).c('blue').lw(1)
         
         # Unit cube: wireframe cube with side length 1, centered at origin
-        unit_cube = Box(pos=[0.0, 0.0, 0.0], size=[1, 1, 1]).wireframe().c('gray').alpha(0.3)
+        unit_cube = Box(pos=[0.0, 0.0, 0.0], size=[1, 1, 1]).wireframe().c('gray').alpha(0.1)
         
         # Combine all reference objects
         self.origin_axes = [x_axis, y_axis, z_axis, unit_cube]
@@ -418,6 +492,11 @@ class CBSRApp(QWidget):
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
         panel.addWidget(self.bbox_toggle)
 
+        self.reference_toggle = QCheckBox("Show Reference (Cube + Axes)")
+        self.reference_toggle.stateChanged.connect(self.on_reference_toggle)
+        self.reference_toggle.setChecked(self.show_reference_preference)
+        panel.addWidget(self.reference_toggle)
+
         self.clean_button = QPushButton("Normalized")
         self.clean_button.clicked.connect(self.on_clean_clicked)
         panel.addWidget(self.clean_button)
@@ -441,9 +520,10 @@ class CBSRApp(QWidget):
         self.loaded_shapes.append(shape)
 
         self.plotter.clear()
-        # Re-add origin axes after clearing
-        for axis in self.origin_axes:
-            self.plotter.add(axis)
+        # Re-add origin axes after clearing (only if reference toggle is on)
+        if self.show_reference_preference:
+            for axis in self.origin_axes:
+                self.plotter.add(axis)
         
         # Display mesh with lighting enabled (like pressing 'L' key)
         shape.mesh.lighting('default').linecolor('black').linewidth(1)
@@ -451,12 +531,24 @@ class CBSRApp(QWidget):
         self.current_mesh_actor = shape.mesh
 
         self.info_label.setText(f"File: {item.text()}\nVertices: {shape.vertices}\nFaces: {shape.faces}")
-        self.bbox_toggle.setChecked(False)
+        self.bbox_toggle.setChecked(self.show_bbox_preference)
+        self.reference_toggle.setChecked(self.show_reference_preference)
+        
+        # If preference is to show bounding box, trigger it
+        if self.show_bbox_preference:
+            self.on_bbox_toggle(True)
+        
+        # If preference is to hide reference objects, remove them
+        if not self.show_reference_preference:
+            self.on_reference_toggle(False)
 
     def on_bbox_toggle(self, state) -> None:
         """Toggle bounding box display."""
         if not self.current_mesh_actor:
             return
+        
+        # Remember the user's preference
+        self.show_bbox_preference = bool(state)
             
         if state:
             self.bbox_actor = Box(self.current_mesh_actor.bounds()).wireframe().c('red')
@@ -465,6 +557,21 @@ class CBSRApp(QWidget):
             if self.bbox_actor:
                 self.plotter.remove(self.bbox_actor)
                 self.bbox_actor = None
+        self.plotter.render()
+
+    def on_reference_toggle(self, state) -> None:
+        """Toggle reference objects (unit cube and axes) display."""
+        # Remember the user's preference
+        self.show_reference_preference = bool(state)
+        
+        if state:
+            # Add reference objects back
+            for obj in self.origin_axes:
+                self.plotter.add(obj)
+        else:
+            # Remove reference objects
+            for obj in self.origin_axes:
+                self.plotter.remove(obj)
         self.plotter.render()
 
     def on_clean_clicked(self) -> None:
@@ -486,35 +593,31 @@ class CBSRApp(QWidget):
                 self.info_label.setText("Cleaning failed: Remeshing step failed.\nCheck console for details.")
                 return
 
-            # Step 2: Normalize
+            # Step 2: Normalize (in place on the same temp file)
             self.info_label.setText("Step 2/2: Normalizing...")
             QApplication.processEvents()
             
-            # Use remeshed version if available, otherwise use original
-            input_path = shape.temp_copy_path if shape.temp_copy_path and os.path.exists(shape.temp_copy_path) else shape.file_path
-            
-            # Create a temporary shape for normalization
-            temp_shape = Shape(input_path)
-            if not temp_shape.normalize():
+            if not shape.normalize():
                 self.info_label.setText("Cleaning failed: Normalization step failed.\nCheck console for details.")
                 return
 
-            # Update the original shape with normalized result
-            shape.temp_copy_path = temp_shape.temp_copy_path
-            shape.mesh = temp_shape.mesh
-            shape.vertices = temp_shape.vertices
-            shape.faces = temp_shape.faces
-
             # Display result
             self.plotter.clear()
-            # Re-add origin axes after clearing
-            for axis in self.origin_axes:
-                self.plotter.add(axis)
+            # Re-add origin axes after clearing (only if reference toggle is on)
+            if self.show_reference_preference:
+                for axis in self.origin_axes:
+                    self.plotter.add(axis)
             
             # Display cleaned mesh with lighting enabled (like pressing 'L' key)
             shape.mesh.lighting('default').linecolor('black').linewidth(1)
             self.plotter.show(shape.mesh, resetcam=True)
             self.current_mesh_actor = shape.mesh
+            
+            # Re-apply bounding box if it was previously shown
+            if self.show_bbox_preference:
+                self.bbox_actor = Box(self.current_mesh_actor.bounds()).wireframe().c('red')
+                self.plotter.add(self.bbox_actor)
+            
             self.info_label.setText(f"Cleaned successfully!\n"
                                    f"File: {os.path.basename(shape.file_path)}\n"
                                    f"Vertices: {shape.vertices}\nFaces: {shape.faces}")
