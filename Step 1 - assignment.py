@@ -3,55 +3,66 @@ import os
 from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QLabel, QCheckBox, QComboBox
 from vedo import Plotter, load, Box
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
+from mesh_utils import parse_obj_info
 
-# Define the parent directory containing main folders
 SHAPEDATA_PARENT = os.path.abspath('ShapeDatabase_INFOMR-master')
 
 class FileExplorer(QWidget):
-    def __init__(self, parent_folder):
+    """Simple 3D file explorer and viewer."""
+    
+    def __init__(self, parent_folder: str):
         super().__init__()
         self.parent_folder = parent_folder
         self.current_main_folder = None
         self.current_mesh = None
         self.bbox_actor = None
 
+        # Setup UI
         main_layout = QHBoxLayout(self)
-
-        # Main folder selection box
+        
+        # Left panel: file browser
         left_panel = QVBoxLayout()
-        left_panel.addWidget(QLabel("Main Folder"))
-        self.main_folder_combo = QComboBox()
-        self.main_folders = [d for d in os.listdir(parent_folder) if os.path.isdir(os.path.join(parent_folder, d))]
-        self.main_folder_combo.addItems(self.main_folders)
-        self.main_folder_combo.currentTextChanged.connect(self.on_main_folder_changed)
-        left_panel.addWidget(self.main_folder_combo)
-
-        # Categories panel
-        self.category_list, category_panel = self.create_list_panel("Categories", self.on_category_selected)
-        left_panel.addLayout(category_panel)
-
-        # Files panel
-        self.file_list, file_panel = self.create_list_panel("Files", self.on_file_selected)
-        left_panel.addLayout(file_panel)
-
+        self._setup_file_browser(left_panel)
         main_layout.addLayout(left_panel)
 
-        # 3D viewer panel
+        # Right panel: 3D viewer
         viewer_panel = QVBoxLayout()
-        viewer_panel.addWidget(QLabel("3D Viewer"))
-        self.viewer_widget = QVTKRenderWindowInteractor(self)
-        self.plotter = Plotter(qt_widget=self.viewer_widget)
-        viewer_panel.addWidget(self.viewer_widget)
-        self.info_label = QLabel("Select a file to see info.")
-        viewer_panel.addWidget(self.info_label)
-        self.bbox_toggle = QCheckBox("Show Bounding Box")
-        self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
-        viewer_panel.addWidget(self.bbox_toggle)
+        self._setup_3d_viewer(viewer_panel)
         main_layout.addLayout(viewer_panel)
 
-        # Initialize with the first main folder
+        # Initialize with first folder
         if self.main_folders:
             self.on_main_folder_changed(self.main_folders[0])
+
+    def _setup_file_browser(self, panel: QVBoxLayout) -> None:
+        """Setup file browser components."""
+        panel.addWidget(QLabel("Main Folder"))
+        self.main_folder_combo = QComboBox()
+        self.main_folders = [d for d in os.listdir(self.parent_folder) 
+                           if os.path.isdir(os.path.join(self.parent_folder, d))]
+        self.main_folder_combo.addItems(self.main_folders)
+        self.main_folder_combo.currentTextChanged.connect(self.on_main_folder_changed)
+        panel.addWidget(self.main_folder_combo)
+
+        self.category_list, category_panel = self._create_list_panel("Categories", self.on_category_selected)
+        panel.addLayout(category_panel)
+
+        self.file_list, file_panel = self._create_list_panel("Files", self.on_file_selected)
+        panel.addLayout(file_panel)
+
+    def _setup_3d_viewer(self, panel: QVBoxLayout) -> None:
+        """Setup 3D viewer components."""
+        panel.addWidget(QLabel("3D Viewer"))
+        self.viewer_widget = QVTKRenderWindowInteractor(self)
+        self.plotter = Plotter(qt_widget=self.viewer_widget)
+        panel.addWidget(self.viewer_widget)
+        
+        self.info_label = QLabel("Select a file to see info.")
+        panel.addWidget(self.info_label)
+        
+        self.bbox_toggle = QCheckBox("Show Bounding Box")
+        self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
+        panel.addWidget(self.bbox_toggle)
 
     def create_list_panel(self, label_text, click_handler):
         list_widget = QListWidget()
