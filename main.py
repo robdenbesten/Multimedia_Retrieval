@@ -6,8 +6,10 @@ import os
 import math
 import threading
 import shutil
-from typing import Tuple, Optional
+import random
+from typing import Tuple, Optional, List
 from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QLabel, QCheckBox, QComboBox, QPushButton
+from PyQt6.QtGui import QPalette, QColor
 from vedo import Plotter, load, Box, Line
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 import trimesh
@@ -25,24 +27,16 @@ def parse_obj_info(filepath: str) -> Tuple[int, int, str, str]:
     with open(filepath, 'r') as f:
         for line in f:
             parts = line.strip().split()
-            if not parts:
-                continue
+            if not parts: continue
             if parts[0] == 'v' and len(parts) == 4:
                 vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
             elif parts[0] == 'f':
                 faces.append(parts[1:])
     
-    # Determine face types
-    face_types = set()
-    for face in faces:
-        count = len(face)
-        if count == 3: face_types.add("triangles")
-        elif count == 4: face_types.add("quads")
-        else: face_types.add("other")
-    
+    # Determine face types and bounding box in one pass
+    face_types = {"triangles" if len(f) == 3 else "quads" if len(f) == 4 else "other" for f in faces}
     face_type = " and ".join(sorted(face_types)) if face_types else "unknown"
     
-    # Calculate bounding box
     bbox = "N/A"
     if vertices:
         xs, ys, zs = zip(*vertices)
@@ -57,92 +51,64 @@ def remesh_to_target_vertices(input_path: str, output_path: str) -> bool:
         print(f"Input file not found: {input_path}")
         return False
     
+    mesh_set = None
     try:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         mesh_set = ml.MeshSet()
+        mesh_set.load_new_mesh(input_path)
         
-        # Load mesh with error handling
-        try:
-            mesh_set.load_new_mesh(input_path)
-        except Exception as e:
-            print(f"Failed to load mesh {input_path}: {e}")
-            return False
-        
-        # Check if mesh loaded successfully
         if mesh_set.current_mesh().vertex_number() == 0:
             print(f"Empty mesh loaded from {input_path}")
             return False
         
-        # Clean mesh with individual error handling
-        cleaning_filters = [
-            "meshing_remove_duplicate_faces", "meshing_remove_duplicate_vertices",
-            "meshing_remove_unreferenced_vertices", "meshing_remove_null_faces",
-            "meshing_repair_non_manifold_edges", "meshing_repair_non_manifold_vertices"
-        ]
-        
-        for filter_name in cleaning_filters:
+        # Clean mesh
+        for filter_name in ["meshing_remove_duplicate_faces", "meshing_remove_duplicate_vertices",
+                           "meshing_remove_unreferenced_vertices", "meshing_remove_null_faces",
+                           "meshing_repair_non_manifold_edges", "meshing_repair_non_manifold_vertices"]:
             try:
                 mesh_set.apply_filter(filter_name)
             except Exception as e:
                 print(f"Warning: {filter_name} failed: {e}")
-                continue  # Continue with other filters
         
-        # Remeshing loop with better error handling
-        counter = 0
-        max_iterations = 20
-        consecutive_failures = 0
-        max_consecutive_failures = 3
-        
+        # Remesh to target
+        counter = consecutive_failures = 0
         while (mesh_set.current_mesh().vertex_number() != TARGET_VERTICES and 
-               counter < max_iterations and consecutive_failures < max_consecutive_failures):
+               counter < 20 and consecutive_failures < 3):
             counter += 1
             current_vertices = mesh_set.current_mesh().vertex_number()
             
             try:
                 if current_vertices < TARGET_VERTICES:
                     mesh_set.apply_filter("meshing_surface_subdivision_midpoint", iterations=1)
-                    consecutive_failures = 0  # Reset on success
+                    consecutive_failures = 0
                 elif current_vertices > TARGET_VERTICES:
-                    estimated_faces = int(mesh_set.current_mesh().face_number() * 
-                                        (TARGET_VERTICES / current_vertices))
-                    if estimated_faces > 0:  # Ensure valid face count
+                    estimated_faces = int(mesh_set.current_mesh().face_number() * (TARGET_VERTICES / current_vertices))
+                    if estimated_faces > 0:
                         mesh_set.apply_filter("meshing_decimation_quadric_edge_collapse",
                                             targetfacenum=estimated_faces, qualitythr=0.5,
                                             preservenormal=True, preserveboundary=True,
                                             preservetopology=True, optimalplacement=True, autoclean=True)
-                        consecutive_failures = 0  # Reset on success
+                        consecutive_failures = 0
                     else:
                         consecutive_failures += 1
                 else:
-                    break  # Target reached
-                    
+                    break
             except Exception as e:
                 consecutive_failures += 1
                 print(f"Remeshing iteration {counter} failed: {e}")
-                if consecutive_failures >= max_consecutive_failures:
-                    print(f"Too many consecutive failures, stopping remeshing")
+                if consecutive_failures >= 3:
+                    print("Too many consecutive failures, stopping remeshing")
                     break
         
-        # Save result with error handling
-        try:
-            mesh_set.save_current_mesh(output_path)
-            final_vertices = mesh_set.current_mesh().vertex_number()
-            print(f"Remeshing completed: {final_vertices} vertices (target: {TARGET_VERTICES})")
-            return True
-        except Exception as e:
-            print(f"Failed to save remeshed mesh: {e}")
-            return False
-            
+        mesh_set.save_current_mesh(output_path)
+        print(f"Remeshing completed: {mesh_set.current_mesh().vertex_number()} vertices (target: {TARGET_VERTICES})")
+        return True
+        
     except Exception as e:
-        print(f"Critical error during remeshing: {e}")
+        print(f"Error during remeshing: {e}")
         return False
     finally:
-        # Clean up mesh_set to free memory
-        try:
-            if 'mesh_set' in locals():
-                del mesh_set
-        except:
-            pass
+        if mesh_set: del mesh_set
 
 
 def normalize_mesh(input_path: str, output_path: str) -> bool:
@@ -151,154 +117,70 @@ def normalize_mesh(input_path: str, output_path: str) -> bool:
         print(f"Input file not found for normalization: {input_path}")
         return False
     
+    mesh = None
     try:
-        # Load mesh with error handling
-        try:
-            mesh = trimesh.load_mesh(input_path)
-        except Exception as e:
-            print(f"Failed to load mesh for normalization {input_path}: {e}")
-            return False
+        import numpy as np
+        mesh = trimesh.load_mesh(input_path)
         
         # Validate mesh
-        if mesh is None:
-            print(f"Mesh is None for {input_path}")
-            return False
-            
-        if not hasattr(mesh, "vertices") or mesh.vertices is None:
-            print(f"No vertices found in mesh {input_path}")
-            return False
-            
-        if mesh.vertices.size == 0:
-            print(f"Empty vertices in mesh {input_path}")
-            return False
-        
-        # Check for valid geometry
-        if len(mesh.vertices) < 3:
-            print(f"Too few vertices in mesh {input_path}: {len(mesh.vertices)}")
+        if not mesh or not hasattr(mesh, "vertices") or mesh.vertices is None or mesh.vertices.size == 0 or len(mesh.vertices) < 3:
+            print(f"Invalid mesh for {input_path}")
             return False
         
         # Step 1: Center at origin
-        try:
-            centroid = mesh.centroid
-            if not all(not math.isnan(x) and not math.isinf(x) for x in centroid):
-                print(f"Invalid centroid for mesh {input_path}: {centroid}")
-                return False
-            mesh.apply_translation(-centroid)
-        except Exception as e:
-            print(f"Failed to center mesh {input_path}: {e}")
+        centroid = mesh.centroid
+        if not all(not math.isnan(x) and not math.isinf(x) for x in centroid):
+            print(f"Invalid centroid for mesh {input_path}: {centroid}")
             return False
+        mesh.apply_translation(-centroid)
         
         # Step 2: Scale to unit size
-        try:
-            bounds = mesh.bounds
-            if bounds is None or len(bounds) != 2:
-                print(f"Invalid bounds for mesh {input_path}")
-                return False
-                
-            size = bounds[1] - bounds[0]
-            max_dimension = size.max()
-            
-            if max_dimension <= 0 or math.isnan(max_dimension) or math.isinf(max_dimension):
-                print(f"Invalid mesh dimensions for {input_path}: {max_dimension}")
-                return False
-                
-            mesh.apply_scale(1.0 / max_dimension)
-        except Exception as e:
-            print(f"Failed to scale mesh {input_path}: {e}")
+        bounds = mesh.bounds
+        if bounds is None or len(bounds) != 2:
+            print(f"Invalid bounds for mesh {input_path}")
             return False
+        size = bounds[1] - bounds[0]
+        max_dimension = size.max()
+        if max_dimension <= 0 or math.isnan(max_dimension) or math.isinf(max_dimension):
+            print(f"Invalid mesh dimensions for {input_path}: {max_dimension}")
+            return False
+        mesh.apply_scale(1.0 / max_dimension)
         
         # Step 3: Alignment using PCA
-        try:
-            import numpy as np
-            
-            # Calculate covariance matrix
-            covariance_matrix = np.cov(mesh.vertices.T)
-            
-            # Get eigenvalues and eigenvectors
-            eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
-            
-            # Sort eigenvectors by eigenvalues (largest first)
-            # This ensures largest eigenvector -> x-axis, second largest -> y-axis
-            sorted_indices = np.argsort(eigenvalues)[::-1]
-            sorted_eigenvalues = eigenvalues[sorted_indices]
-            sorted_eigenvectors = eigenvectors[:, sorted_indices]
-            
-            # Normalize eigenvectors (should already be normalized, but ensure it)
-            e1 = sorted_eigenvectors[:, 0] / np.linalg.norm(sorted_eigenvectors[:, 0])
-            e2 = sorted_eigenvectors[:, 1] / np.linalg.norm(sorted_eigenvectors[:, 1])
-            e3 = sorted_eigenvectors[:, 2] / np.linalg.norm(sorted_eigenvectors[:, 2])
-            
-            # Ensure right-handed coordinate system
-            if np.dot(e3, np.cross(e1, e2)) < 0:
-                e3 = -e3
-            
-            # Create rotation matrix: eigenvectors define the new coordinate system
-            # Each eigenvector becomes a column in the rotation matrix
-            rotation_matrix = np.column_stack([e1, e2, e3])
-            
-            # Transform vertices: new_vertices = vertices @ rotation_matrix
-            # This aligns the largest eigenvector with x-axis, second largest with y-axis
-            aligned_vertices = mesh.vertices @ rotation_matrix
-            
-            # Create aligned mesh
-            mesh = trimesh.Trimesh(vertices=aligned_vertices, faces=mesh.faces, process=False)
-            
-        except Exception as e:
-            print(f"Failed to align mesh {input_path}: {e}")
-            return False
+        covariance_matrix = np.cov(mesh.vertices.T)
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+        sorted_indices = np.argsort(eigenvalues)[::-1]
+        sorted_eigenvectors = eigenvectors[:, sorted_indices]
+        
+        # Normalize eigenvectors and ensure right-handed coordinate system
+        e1, e2, e3 = [sorted_eigenvectors[:, i] / np.linalg.norm(sorted_eigenvectors[:, i]) for i in range(3)]
+        if np.dot(e3, np.cross(e1, e2)) < 0: e3 = -e3
+        
+        # Transform vertices
+        rotation_matrix = np.column_stack([e1, e2, e3])
+        aligned_vertices = mesh.vertices @ rotation_matrix
+        mesh = trimesh.Trimesh(vertices=aligned_vertices, faces=mesh.faces, process=False)
         
         # Step 4: Flipping based on triangle center analysis
-        try:
-            # Calculate triangle centers
-            triangle_centers = mesh.vertices[mesh.faces].mean(axis=1)
-            
-            # Calculate flipping factors for each axis
-            flip_factors = []
-            for axis in [0, 1, 2]:  # x, y, z axes
-                # Sum of signed squared distances from origin
-                factor = np.sum(np.sign(triangle_centers[:, axis]) * (triangle_centers[:, axis] ** 2))
-                flip_factors.append(np.sign(factor))
-            
-            flip_factors = np.array(flip_factors)
-            
-            # Apply flipping to vertices
-            flipped_vertices = mesh.vertices.copy()
-            flipped_vertices[:, 0] *= flip_factors[0]
-            flipped_vertices[:, 1] *= flip_factors[1]
-            flipped_vertices[:, 2] *= flip_factors[2]
-            
-            # Handle face orientation if odd number of flips
-            faces = mesh.faces.copy()
-            if flip_factors[0] * flip_factors[1] * flip_factors[2] == -1:
-                faces = np.fliplr(faces)  # Flip face orientation
-            
-            # Create final mesh
-            mesh = trimesh.Trimesh(vertices=flipped_vertices, faces=faces, process=False)
-            
-        except Exception as e:
-            print(f"Failed to flip mesh {input_path}: {e}")
-            return False
+        triangle_centers = mesh.vertices[mesh.faces].mean(axis=1)
+        flip_factors = np.array([np.sign(np.sum(np.sign(triangle_centers[:, axis]) * (triangle_centers[:, axis] ** 2))) for axis in range(3)])
+        
+        # Apply flipping
+        flipped_vertices = mesh.vertices * flip_factors
+        faces = np.fliplr(mesh.faces) if np.prod(flip_factors) == -1 else mesh.faces
+        mesh = trimesh.Trimesh(vertices=flipped_vertices, faces=faces, process=False)
         
         # Save result
-        try:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            mesh.export(output_path)
-            print(f"Full normalization completed for {os.path.basename(input_path)}")
-            return True
-        except Exception as e:
-            print(f"Failed to export normalized mesh {output_path}: {e}")
-            return False
-            
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        mesh.export(output_path)
+        print(f"Full normalization completed for {os.path.basename(input_path)}")
+        return True
+        
     except Exception as e:
-        print(f"Critical error during normalization: {e}")
+        print(f"Error during normalization: {e}")
         return False
     finally:
-        # Clean up mesh to free memory
-        try:
-            if 'mesh' in locals():
-                del mesh
-        except:
-            pass
+        if mesh: del mesh
 
 
 def cleanup_temp_folder() -> None:
@@ -365,13 +247,8 @@ class Shape:
             self.temp_copy_path = os.path.join(TEMP_REMESH_DIR, f"{name}_processed{ext}")
             
             if remesh_to_target_vertices(self.file_path, self.temp_copy_path):
-                try:
-                    self.mesh = load(self.temp_copy_path)
-                    self.vertices, self.faces, _, _ = parse_obj_info(self.temp_copy_path)
-                    return True
-                except Exception as e:
-                    print(f"Failed to load remeshed file: {e}")
-                    return False
+                self._load_processed_mesh()
+                return True
             else:
                 print(f"Remeshing failed for {self.file_path}")
                 return False
@@ -381,7 +258,6 @@ class Shape:
 
     def normalize(self) -> bool:
         """Normalize mesh (center, scale, align, flip) in place on temp file."""
-        # Use the temp file if it exists (from remeshing), otherwise use original
         input_path = self.temp_copy_path if self.temp_copy_path and os.path.exists(self.temp_copy_path) else self.file_path
         
         if not os.path.exists(input_path):
@@ -389,21 +265,24 @@ class Shape:
             return False
 
         try:
-            # Normalize in place - overwrite the temp file
             if normalize_mesh(input_path, self.temp_copy_path):
-                try:
-                    self.mesh = load(self.temp_copy_path)
-                    self.vertices, self.faces, _, _ = parse_obj_info(self.temp_copy_path)
-                    return True
-                except Exception as e:
-                    print(f"Failed to load normalized file: {e}")
-                    return False
+                self._load_processed_mesh()
+                return True
             else:
                 print(f"Normalization failed for {input_path}")
                 return False
         except Exception as e:
             print(f"Error during normalization: {e}")
             return False
+
+    def _load_processed_mesh(self) -> None:
+        """Load processed mesh from temp file."""
+        try:
+            self.mesh = load(self.temp_copy_path)
+            self.vertices, self.faces, _, _ = parse_obj_info(self.temp_copy_path)
+        except Exception as e:
+            print(f"Failed to load processed file: {e}")
+            raise
 
 
 class CBSRApp(QWidget):
@@ -418,14 +297,18 @@ class CBSRApp(QWidget):
         self.origin_axes = None
         self.show_bbox_preference = False
         self.show_reference_preference = True
+        self.dark_mode_enabled = False
 
         self.setWindowTitle("CBSR Debug GUI")
-        self.resize(1200, 600)
+        self.resize(1200, 900)
         
-        # Setup UI
-        layout = QHBoxLayout(self)
-        layout.addLayout(self._create_file_panel())
-        layout.addLayout(self._create_viewer_panel())
+        # Setup UI: top row (file panel + main viewer), bottom row (gallery spans full width)
+        root_layout = QVBoxLayout(self)
+        top_row = QHBoxLayout()
+        top_row.addLayout(self._create_file_panel())
+        top_row.addLayout(self._create_viewer_panel())
+        root_layout.addLayout(top_row)
+        root_layout.addLayout(self._create_gallery_panel())
 
         # Initialize with first category
         if self.categories:
@@ -497,10 +380,32 @@ class CBSRApp(QWidget):
         self.reference_toggle.setChecked(self.show_reference_preference)
         panel.addWidget(self.reference_toggle)
 
+        self.darkmode_toggle = QCheckBox("Dark Mode")
+        self.darkmode_toggle.stateChanged.connect(self.on_darkmode_toggle)
+        panel.addWidget(self.darkmode_toggle)
+
         self.clean_button = QPushButton("Normalized")
         self.clean_button.clicked.connect(self.on_clean_clicked)
         panel.addWidget(self.clean_button)
-        
+        return panel
+
+    def _create_gallery_panel(self) -> QVBoxLayout:
+        """Create bottom gallery panel that spans the full window width."""
+        panel = QVBoxLayout()
+        panel.addWidget(QLabel("Gallery (5 random from current category)"))
+        self.gallery_layout = QHBoxLayout()
+        self.gallery_widgets: List[QVTKRenderWindowInteractor] = []
+        self.gallery_plotters: List[Plotter] = []
+        for _ in range(5):
+            w = QVTKRenderWindowInteractor(self)
+            p = Plotter(qt_widget=w)
+            self.gallery_widgets.append(w)
+            self.gallery_plotters.append(p)
+            self.gallery_layout.addWidget(w)
+        panel.addLayout(self.gallery_layout)
+        self.refresh_gallery_button = QPushButton("Refresh Gallery")
+        self.refresh_gallery_button.clicked.connect(self.load_random_gallery)
+        panel.addWidget(self.refresh_gallery_button)
         return panel
 
     def on_category_changed(self, category_name: str) -> None:
@@ -510,6 +415,8 @@ class CBSRApp(QWidget):
         category_path = os.path.join(self.parent_folder, category_name)
         files = [f for f in os.listdir(category_path) if f.endswith('.obj')]
         self.file_list.addItems(files)
+        # Update gallery when category changes
+        self.load_random_gallery()
 
     def on_file_selected(self, item) -> None:
         """Handle file selection and display mesh."""
@@ -574,6 +481,54 @@ class CBSRApp(QWidget):
                 self.plotter.remove(obj)
         self.plotter.render()
 
+    def on_darkmode_toggle(self, state) -> None:
+        """Toggle dark mode for the entire app and 3D viewers."""
+        self.dark_mode_enabled = bool(state)
+        self._apply_qt_palette(self.dark_mode_enabled)
+        # Update backgrounds of all plotters
+        try:
+            bg = 'black' if self.dark_mode_enabled else 'white'
+            if hasattr(self, 'plotter') and self.plotter:
+                self.plotter.background(bg)
+                self.plotter.render()
+            if hasattr(self, 'gallery_plotters'):
+                for p in self.gallery_plotters:
+                    try:
+                        p.background(bg)
+                        p.render()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _apply_qt_palette(self, dark: bool) -> None:
+        """Apply a dark or default palette to the Qt application."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        if not dark:
+            app.setPalette(QPalette())
+            return
+        palette = QPalette()
+        # Window
+        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
+        # Base/Alternate
+        palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+        # Tooltips
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(220, 220, 220))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(53, 53, 53))
+        # Text/Button
+        palette.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
+        palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(220, 220, 220))
+        # Bright/Dark/Shadow
+        palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(240, 240, 240))
+        app.setPalette(palette)
+
     def on_clean_clicked(self) -> None:
         """Clean mesh (remesh + normalize) with robust error handling."""
         if not self.loaded_shapes:
@@ -627,6 +582,65 @@ class CBSRApp(QWidget):
             self.info_label.setText(f"Cleaning failed: Unexpected error.\nCheck console for details.\nError: {str(e)}")
             return
 
+    def _list_obj_files_in_current_category(self) -> List[str]:
+        """List absolute paths to .obj files in the current category."""
+        if not getattr(self, 'current_category', None):
+            return []
+        category_path = os.path.join(self.parent_folder, self.current_category)
+        try:
+            files = [os.path.join(category_path, f) for f in os.listdir(category_path) if f.lower().endswith('.obj')]
+            return files
+        except Exception:
+            return []
+
+    def load_random_gallery(self) -> None:
+        """Load 5 random objects into the gallery viewers from current category."""
+        obj_files = self._list_obj_files_in_current_category()
+        if not obj_files:
+            # Clear gallery if nothing available
+            for p in getattr(self, 'gallery_plotters', []):
+                try:
+                    p.clear()
+                    p.render()
+                except Exception:
+                    pass
+            return
+
+        choices = random.sample(obj_files, k=min(5, len(obj_files)))
+        # Ensure we have 5 entries by repeating if fewer than 5 files exist
+        while len(choices) < 5:
+            choices.append(random.choice(obj_files))
+
+        for plotter, path in zip(self.gallery_plotters, choices):
+            try:
+                plotter.clear()
+                mesh = load(path)
+                mesh.lighting('default').linecolor('black').linewidth(1)
+                plotter.show(mesh, resetcam=True)
+            except Exception:
+                try:
+                    plotter.clear()
+                    plotter.render()
+                except Exception:
+                    pass
+        # Enforce square viewers after content is shown
+        self._enforce_gallery_square_sizes()
+
+    def _enforce_gallery_square_sizes(self) -> None:
+        """Adjust gallery viewer heights to keep them square (height = width)."""
+        if not hasattr(self, 'gallery_widgets'):
+            return
+        for w in self.gallery_widgets:
+            try:
+                w.setFixedHeight(max(0, w.width()))
+            except Exception:
+                pass
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Keep gallery viewers square on window resize
+        self._enforce_gallery_square_sizes()
+
     def closeEvent(self, event) -> None:
         """Handle application close with proper cleanup."""
         try:
@@ -634,6 +648,14 @@ class CBSRApp(QWidget):
             if hasattr(self, 'plotter') and self.plotter:
                 self.plotter.clear()
                 self.plotter.close()
+            # Close gallery plotters
+            if hasattr(self, 'gallery_plotters') and self.gallery_plotters:
+                for p in self.gallery_plotters:
+                    try:
+                        p.clear()
+                        p.close()
+                    except Exception:
+                        pass
             
             # Clear loaded shapes to free memory
             self.loaded_shapes.clear()
