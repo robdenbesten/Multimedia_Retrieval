@@ -11,6 +11,79 @@ def preprocess_mesh(mesh):
     trimesh.repair.fix_winding(mesh)
     return mesh
 
+
+def convex_hull_with_n_points(mesh, target_points=5000, max_subdiv=5):
+    # Subdivide until reaching or exceeding the target number of vertices
+    subdivided = mesh.copy()
+    for _ in range(max_subdiv):
+        if len(subdivided.vertices) >= target_points:
+            break
+        subdivided = subdivided.subdivide()
+    # Optionally, randomly sample if there are too many points
+    if len(subdivided.vertices) > target_points:
+        idx = np.random.choice(len(subdivided.vertices), target_points, replace=False)
+        sampled_vertices = subdivided.vertices[idx]
+        # Create a new mesh with sampled vertices (faces are ignored)
+        hull = trimesh.convex.convex_hull(sampled_vertices)
+    else:
+        hull = subdivided.convex_hull
+
+    trimesh.repair.fix_normals(hull, multibody=False)
+    trimesh.repair.fix_winding(hull)
+    return hull
+
+def mesh_volume(vertices, faces):
+    v0 = vertices[faces[:, 0]]
+    v1 = vertices[faces[:, 1]]
+    v2 = vertices[faces[:, 2]]
+    # Compute the signed volume of each tetrahedron (triangle + origin)
+    cross = np.cross(v0, v1)
+    dot = np.einsum('ij,ij->i', cross, v2)
+    volume = np.sum(dot) / 6.0
+    return abs(volume)
+
+def compute_metrics_from_convex_hull(mesh):
+    original_volume = mesh.volume
+    # Compute convex hull
+    hull = mesh.convex_hull
+    trimesh.repair.fix_winding(hull)
+
+    volume = hull.volume
+    area = hull.area
+    diameter = np.linalg.norm(hull.extents)
+
+    # Compactness (with respect to a sphere)
+    compactness = (area ** 3) / (36 * np.pi * (volume ** 2)) if volume > 0 else np.nan
+
+    # Sphericity (reciprocal of compactness)
+    sphericity = 1 / compactness if compactness > 0 else np.nan
+
+    # 3D Rectangularity (shape volume divided by OBB volume)
+    try:
+        obb_volume = hull.bounding_box_oriented.volume
+        rectangularity = volume / obb_volume if obb_volume > 0 else np.nan
+    except Exception:
+        rectangularity = np.nan
+
+    # Convexity (shape volume divided by convex hull volume, always 1 for convex hull)
+    convexity = original_volume /volume if volume > 0 else np.nan
+
+    # Eccentricity (ratio of largest to smallest eigenvalues of covariance matrix)
+    moments = hull.principal_inertia_components
+    eccentricity = moments[0] / moments[2] if moments[2] > 1e-6 else np.nan
+
+    return {
+        "Mesh volume": volume,
+        "Surface area": area,
+        "Diameter": diameter,
+        "Compactness": compactness,
+        "Rectangularity": rectangularity,
+        "Convexity": convexity,
+        "Eccentricity": eccentricity,
+        "Sphericity": sphericity,
+        "extents": hull.extents,
+    }
+
 def compute_metrics(mesh, original_mesh):
     volume = mesh.volume
     area = mesh.area
@@ -23,12 +96,15 @@ def compute_metrics(mesh, original_mesh):
         convexity = np.nan
     moments = mesh.principal_inertia_components
     eccentricity = moments[0] / moments[2] if moments[2] > 1e-6 else np.nan
-    compactness = (6 * np.sqrt(np.pi) * volume) / (area ** 1.5) if area > 0 else np.nan
+    compactness = (area ** 3) / (36 * np.pi * (volume ** 2)) if volume > 0 else np.nan #(6 * np.sqrt(np.pi) * volume) / (area ** 1.5) if area > 0 else np.nan
+    sphericity = 1 / compactness if compactness > 0 else np.nan
+
     try:
         obb_volume = mesh.bounding_box_oriented.volume
         rectangularity = volume / obb_volume if obb_volume > 0 else np.nan
     except ValueError:
         rectangularity = np.nan
+
     return {
         "Mesh volume": volume,
         "Surface area": area,
@@ -36,7 +112,9 @@ def compute_metrics(mesh, original_mesh):
         "Compactness": compactness,
         "Rectangularity": rectangularity,
         "Convexity": convexity,
-        "Eccentricity": eccentricity
+        "Eccentricity": eccentricity,
+        "Sphericity": sphericity,
+        "extents": mesh.extents,
     }
 
 def d2_descriptor(vertices, n_samples):
@@ -98,104 +176,92 @@ def plot_histogram(data, bins, color, title, xlabel, ylabel):
     plt.ylabel(ylabel)
     plt.grid(True)
 
-def main():
-    mesh_path = 'ShapeDatabase_INFOMR-master/Normalised_models/ClassicPiano/D00009.obj'
+def save_features_for_all_objects_txt(
+    base_dir='ShapeDatabase_INFOMR-master/after_remeshing_normalise',
+    features_dir='ShapeDatabase_INFOMR-master/features_3',
+    n_samples=10000,
+    bins_dict={'D1': 10, 'D2': 10, 'A3': 10, 'D3': 10, 'D4': 10}
+):
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if not file.lower().endswith('.obj'):
+                continue
+            obj_path = os.path.join(root, file)
+            rel_path = os.path.relpath(obj_path, base_dir)
+            feature_path = os.path.join(features_dir, os.path.splitext(rel_path)[0] + '.txt')
+            os.makedirs(os.path.dirname(feature_path), exist_ok=True)
+
+            try:
+                mesh = trimesh.load(obj_path)
+                #preprocessed = preprocess_mesh(mesh.copy())
+                # hull = convex_hull_with_n_points(mesh.copy())
+                metrics = compute_metrics_from_convex_hull(mesh)
+                vertices = mesh.vertices
+
+                d1 = d1_descriptor(vertices, n_samples)
+                d2 = d2_descriptor(vertices, n_samples)
+                a3 = a3_descriptor(vertices, n_samples)
+                d3 = d3_descriptor(vertices, n_samples)
+                d4 = d4_descriptor(vertices, n_samples)
+
+                # Compute histograms
+                d1_hist, _ = np.histogram(d1, bins=bins_dict['D1'])
+                d2_hist, _ = np.histogram(d2, bins=bins_dict['D2'])
+                a3_hist, _ = np.histogram(a3, bins=bins_dict['A3'])
+                d3_hist, _ = np.histogram(d3, bins=bins_dict['D3'])
+                d4_hist, _ = np.histogram(d4, bins=bins_dict['D4'])
+
+                with open(feature_path, 'w') as f:
+                    f.write('Metrics:\n')
+                    for k, v in metrics.items():
+                        f.write(f'{k}: {v}\n')
+                    f.write('\nD1_hist:\n' + ','.join(map(str, d1_hist)) + '\n')
+                    f.write('\nD2_hist:\n' + ','.join(map(str, d2_hist)) + '\n')
+                    f.write('\nA3_hist:\n' + ','.join(map(str, a3_hist)) + '\n')
+                    f.write('\nD3_hist:\n' + ','.join(map(str, d3_hist)) + '\n')
+                    f.write('\nD4_hist:\n' + ','.join(map(str, d4_hist)) + '\n')
+
+                print(f"Saved features for {obj_path} to {feature_path}")
+            except Exception as e:
+                print(f"Failed for {obj_path}: {e}")
+
+def test():
+    mesh_path = 'ShapeDatabase_INFOMR-master/after_remeshing_normalise/Tree/D00096_copy.obj'
     original_mesh = trimesh.load(mesh_path)
-    mesh = preprocess_mesh(original_mesh.copy())
-    metrics = compute_metrics(mesh, original_mesh)
+    preprocessed_mesh = preprocess_mesh(original_mesh.copy())
+
+    # Compute metrics on convex hull of preprocessed mesh
+    hull_mesh = convex_hull_with_n_points(preprocessed_mesh.copy())
+    metrics = compute_metrics(hull_mesh, preprocessed_mesh)
+    print(mesh_volume(hull_mesh.vertices, hull_mesh.faces))
     print("\n--- Mesh Properties ---")
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    vertices = mesh.vertices
+    # Compute descriptors on preprocessed mesh
+    vertices = preprocessed_mesh.vertices
     n_samples = 10000
 
     d2 = d2_descriptor(vertices, n_samples)
-    plot_histogram(d2, 15, 'skyblue', 'Histogram Distance Between 2 Random Vertices', 'Distance', 'Frequency')
+    plot_histogram(d2, 10, 'skyblue', 'Histogram Distance Between 2 Random Vertices', 'Distance', 'Frequency')
 
     d1 = d1_descriptor(vertices, n_samples)
-    plot_histogram(d1, 20, 'orange', 'Histogram of Distance Between Barycenter and Random Vertex', 'Distance', 'Frequency')
+    plot_histogram(d1, 10, 'orange', 'Histogram of Distance Between Barycenter and Random Vertex', 'Distance', 'Frequency')
 
     a3 = a3_descriptor(vertices, n_samples)
-    plot_histogram(a3, 15, 'lightgreen', 'Histogram of Angle Between 3 Random Vertices', 'Angle (Degrees)', 'Frequency')
+    plot_histogram(a3, 10, 'lightgreen', 'Histogram of Angle Between 3 Random Vertices', 'Angle (Degrees)', 'Frequency')
 
     d3 = d3_descriptor(vertices, n_samples)
-    plot_histogram(d3, 20, 'violet', 'Histogram of Sqrt Area of Triangle from 3 Random Vertices', 'Sqrt(Area)', 'Frequency')
+    plot_histogram(d3, 10, 'violet', 'Histogram of Sqrt Area of Triangle from 3 Random Vertices', 'Sqrt(Area)', 'Frequency')
 
     d4 = d4_descriptor(vertices, n_samples)
-    plot_histogram(d4, 20, 'teal', 'Histogram of Cube Root of Tetrahedron Volume from 4 Random Vertices', 'Cube Root of Volume', 'Frequency')
+    plot_histogram(d4, 10, 'teal', 'Histogram of Cube Root of Tetrahedron Volume from 4 Random Vertices', 'Cube Root of Volume', 'Frequency')
 
     plt.show()
 
-def find_most_similar_objects(query_path, models_dir, top_n_metrics=100, top_n_final=5, n_samples=10000):
-    def metrics_to_vec(metrics):
-        return np.array([metrics[k] for k in sorted(metrics.keys()) if np.isfinite(metrics[k])])
 
-    print("Loading query mesh and computing metrics...")
-    query_mesh = trimesh.load(query_path, process=False)
-    query_metrics = compute_metrics(query_mesh, query_mesh)
-    query_vec = metrics_to_vec(query_metrics)
-
-    print("Stage 1: Scanning all objects and computing metrics...")
-    obj_paths, metrics_vecs = [], []
-    for class_dir in os.listdir(models_dir):
-        class_path = os.path.join(models_dir, class_dir)
-        if not os.path.isdir(class_path):
-            continue
-        for obj_file in os.listdir(class_path):
-            if not obj_file.lower().endswith('.obj'):
-                continue
-            obj_path = os.path.join(class_path, obj_file)
-            try:
-                mesh = trimesh.load(obj_path, process=False)
-                metrics = compute_metrics(mesh, mesh)
-                vec = metrics_to_vec(metrics)
-                if len(vec) == len(query_vec):
-                    obj_paths.append(obj_path)
-                    metrics_vecs.append(vec)
-            except Exception:
-                continue
-    metrics_vecs = np.array(metrics_vecs)
-    dists = np.linalg.norm(metrics_vecs - query_vec, axis=1)
-    top_idx = np.argsort(dists)[:top_n_metrics]
-    top_candidates = [obj_paths[i] for i in top_idx]
-
-    print("Stage 2: Computing descriptors for top candidates...")
-    def descriptor_vector(mesh):
-        v = mesh.vertices
-        d1 = d1_descriptor(v, n_samples)
-        d2 = d2_descriptor(v, n_samples)
-        a3 = a3_descriptor(v, n_samples)
-        d3 = d3_descriptor(v, n_samples)
-        d4 = d4_descriptor(v, n_samples)
-        def hist(x, bins): return np.histogram(x, bins=bins, range=(np.nanmin(x), np.nanmax(x)))[0]
-        return np.concatenate([
-            hist(d1, 20), hist(d2, 15), hist(a3, 15), hist(d3, 20), hist(d4, 20)
-        ]).astype(float)
-
-    query_desc = descriptor_vector(query_mesh)
-    desc_dists = []
-    for i, obj_path in enumerate(top_candidates):
-        print(f"Processing descriptor {i+1}/{len(top_candidates)}: {obj_path}")
-        try:
-            mesh = trimesh.load(obj_path, process=False)
-            desc = descriptor_vector(mesh)
-            if len(desc) == len(query_desc):
-                dist = np.linalg.norm(query_desc - desc)
-                desc_dists.append((dist, obj_path))
-        except Exception:
-            continue
-    desc_dists.sort()
-    print("Done! Returning most similar objects.")
-    return [p for _, p in desc_dists[:top_n_final]]
-
-#similar_objs = find_most_similar_objects(
-#     'ShapeDatabase_INFOMR-master/Normalised_models/ClassicPiano/D00009.obj',
-#     'ShapeDatabase_INFOMR-master/Normalised_models'
-#)
-
-#print("\nMost similar objects:")
-#for i, obj_path in enumerate(similar_objs, 1):
-#    print(f"{i}: {obj_path}")
 if __name__ == "__main__":
-    main()
+    save_features_for_all_objects_txt()
+    #test()
+
+
