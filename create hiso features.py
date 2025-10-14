@@ -41,10 +41,10 @@ def plot_histogram(ax, hist_values, color):
 row_colors = ['#e41a1c', '#377eb8', '#4daf4a', '#ff7f00', '#984ea3']
 
 file_paths = [
-    'ShapeDatabase_INFOMR-master/Features_2/AircraftBuoyant/m1338_copy.txt', #round
-    'ShapeDatabase_INFOMR-master/features_2/Cellphone/D00192_copy.txt', #flat
-    'ShapeDatabase_INFOMR-master/features_2/Bottle/D00166_copy.txt',  #elongated
-    'ShapeDatabase_INFOMR-master/features_2/Quadruped/D00226_copy.txt', #irregular
+    'ShapeDatabase_INFOMR-master/features_test/AircraftBuoyant/m1338_copy.txt', #round
+    'ShapeDatabase_INFOMR-master/features_test/Cellphone/D00192_copy.txt', #flat
+    'ShapeDatabase_INFOMR-master/features_test/Bottle/D00166_copy.txt',  #elongated
+    'ShapeDatabase_INFOMR-master/features_test/Quadruped/D00226_copy.txt', #irregular
 ]
 
 all_files_data = [parse_hist_file(fp) for fp in file_paths]
