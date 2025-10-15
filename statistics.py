@@ -49,7 +49,7 @@ def evaluate_overall_correct_rate(feature_dir, top_n=5):
     algo_path = _find_comparison_algo_file(project_root)
     algo_mod = _import_module_from_path("comparison_algo", algo_path)
 
-    engine = algo_mod.ShapeSearchEngine(feature_dir)
+    engine = algo_mod.EnhancedShapeSearchEngine(feature_dir)
 
     correct = 0
     total = 0

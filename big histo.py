@@ -97,13 +97,54 @@ def plot_descriptor_grid(descriptor, cat_to_arrays, out_dir, linewidth=0.9):
     plt.close(fig)
     print(f'Saved {descriptor} figure to: {out_path}')
 
+def collect_convexity_values(base_dir):
+    convexities = []
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if not file.lower().endswith('.txt'):
+                continue
+            fpath = os.path.join(root, file)
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip().startswith('Convexity:'):
+                            try:
+                                val = float(line.split(':', 1)[1].strip())
+                                convexities.append(val)
+                            except Exception:
+                                pass
+                            break
+            except Exception:
+                pass
+    return convexities
+
+def plot_convexity_histogram(convexities, out_dir):
+    if not convexities:
+        print('No convexity values found.')
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    plt.figure(figsize=(7, 4))
+    plt.hist(convexities, bins=40, color='teal', edgecolor='black', alpha=0.8)
+    plt.title('Convexity Distribution (all objects)')
+    plt.xlabel('Convexity')
+    plt.ylabel('Count')
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, 'convexity_histogram.png')
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+    print(f'Saved convexity histogram to: {out_path}')
+
 def main():
     base_dir = os.path.join('ShapeDatabase_INFOMR-master', 'features_test')
-    out_dir = 'plots'  # write figures to `plots`
+    out_dir = 'plots'
 
     data = collect_category_data(base_dir)
     for descriptor, cat_to_arrays in data.items():
         plot_descriptor_grid(descriptor, cat_to_arrays, out_dir)
+
+    # Add convexity plot
+    convexities = collect_convexity_values(base_dir)
+    plot_convexity_histogram(convexities, out_dir)
 
 if __name__ == '__main__':
     main()
