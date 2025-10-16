@@ -11,11 +11,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # Fixed descriptor ranges (unit AABB-diagonal scaling)
 # -----------------------------
 RANGES: Dict[str, Tuple[float, float]] = {
-    'D1': (0.0, 0.5),  # distance to centroid (origin)
-    'D2': (0.0, 1.0),  # pairwise point distance
+    'D1': (0.0, 0.5),    # distance to centroid (origin)
+    'D2': (0.0, 1.0),    # pairwise point distance
     'A3': (0.0, 180.0),  # triangle angle (deg)
-    'D3': (0.0, 0.7),  # sqrt(area), padded (tight ~0.658)
-    'D4': (0.0, 0.5),  # cbrt(volume), padded (tight ~0.488)
+    'D3': (0.0, 0.7),    # sqrt(area), padded (tight ~0.658)
+    'D4': (0.0, 0.5),    # cbrt(volume), padded (tight ~0.488)
 }
 
 # Increased bin count for higher feature resolution.
@@ -25,49 +25,13 @@ DEFAULT_BINS: Dict[str, int] = {k: 20 for k in RANGES.keys()}
 # -----------------------------
 # Geometry utilities and repair
 # -----------------------------
-def robust_original_volume(mesh: trimesh.Trimesh) -> float:
-    # Best-effort estimation for non-watertight meshes.
-    try:
-        if mesh.is_watertight and np.isfinite(mesh.volume):
-            return float(mesh.volume)
-    except Exception:
-        pass
-    try:
-        m_filled = mesh.copy()
-        trimesh.repair.fill_holes(m_filled)
-        if m_filled.is_watertight and np.isfinite(m_filled.volume):
-            return float(m_filled.volume)
-    except Exception:
-        pass
-    try:
-        ext = float(np.max(mesh.extents))
-        if ext > 0 and np.isfinite(ext):
-            pitch = ext / 128.0
-            vg = mesh.voxelized(pitch)
-            solid = vg.fill()
-            vox_count = int(solid.points.shape[0])
-            if vox_count > 0:
-                return vox_count * (float(solid.pitch) ** 3)
-    except Exception:
-        pass
-    # Fallback: if all else fails, use the convex hull volume.
-    # This provides an upper bound on the volume.
-    try:
-        hull_vol = float(mesh.convex_hull.volume)
-        if np.isfinite(hull_vol) and hull_vol > 0:
-            return hull_vol
-    except Exception:
-        pass
-    return float('nan')
-
-
-def repair_mesh_inplace(mesh: trimesh.Trimesh) -> None:
+def repair_mesh(mesh: trimesh.Trimesh) -> None:
     # Remove broken/duplicate topology
     for fn in (
-            getattr(mesh, 'remove_unreferenced_vertices', None),
-            getattr(mesh, 'remove_duplicate_faces', None),
-            getattr(mesh, 'remove_degenerate_faces', None),
-            getattr(mesh, 'merge_vertices', None),
+        getattr(mesh, 'remove_unreferenced_vertices', None),
+        getattr(mesh, 'remove_duplicate_faces', None),
+        getattr(mesh, 'remove_degenerate_faces', None),
+        getattr(mesh, 'merge_vertices', None),
     ):
         try:
             if fn is not None:
@@ -96,30 +60,13 @@ def repair_mesh_inplace(mesh: trimesh.Trimesh) -> None:
         pass
 
 
-def normalize_mesh_unit_diameter(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """
-    Enforce centroid at origin and scale so AABB diagonal is 1. Idempotent if already normalized.
-    """
-    m = mesh.copy()
-    center = m.centroid
-    if np.linalg.norm(center) > 1e-12:
-        m.apply_translation(-center)
-    diameter = float(np.linalg.norm(m.extents)) + 1e-18
-    if not np.isfinite(diameter) or diameter <= 0:
-        return m
-    m.apply_scale(1.0 / diameter)
-    # Re-center to suppress numerical drift
-    m.apply_translation(-m.centroid)
-    return m
-
-
-def _rng_from_relpath(rel_path: str) -> np.random.Generator:
+def deterministic_rng_from_relpath(rel_path: str) -> np.random.Generator:
     h = hashlib.sha256(rel_path.encode('utf-8')).digest()
     seed = int.from_bytes(h[:8], byteorder='little', signed=False)
     return np.random.default_rng(seed)
 
 
-def sample_surface_points(mesh: trimesh.Trimesh, n_points: int, rng: np.random.Generator) -> np.ndarray:
+def sample_surface_points_weighted(mesh: trimesh.Trimesh, n_points: int, rng: np.random.Generator) -> np.ndarray:
     # Area-weighted triangle sampling; fallback to vertices for faceless meshes.
     if len(mesh.faces) == 0 or len(mesh.triangles) == 0:
         idx = rng.integers(0, len(mesh.vertices), size=n_points)
@@ -141,18 +88,18 @@ def sample_surface_points(mesh: trimesh.Trimesh, n_points: int, rng: np.random.G
 # -----------------------------
 # Descriptors
 # -----------------------------
-def d1_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+def descriptor_d1_distance_to_origin(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
     idx = rng.integers(0, len(points), size=n_samples)
     return np.linalg.norm(points[idx], axis=1)
 
 
-def d2_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+def descriptor_d2_pairwise_distance(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
     i1 = rng.integers(0, len(points), size=n_samples)
     i2 = rng.integers(0, len(points), size=n_samples)
     return np.linalg.norm(points[i1] - points[i2], axis=1)
 
 
-def a3_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+def descriptor_a3_triangle_angle_deg(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
     i1 = rng.integers(0, len(points), size=n_samples)
     i2 = rng.integers(0, len(points), size=n_samples)
     i3 = rng.integers(0, len(points), size=n_samples)
@@ -165,7 +112,7 @@ def a3_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) 
     return np.degrees(np.arccos(cos_theta))
 
 
-def d3_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+def descriptor_d3_sqrt_triangle_area(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
     i1 = rng.integers(0, len(points), size=n_samples)
     i2 = rng.integers(0, len(points), size=n_samples)
     i3 = rng.integers(0, len(points), size=n_samples)
@@ -174,7 +121,7 @@ def d3_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) 
     return np.sqrt(np.maximum(area, 0.0))
 
 
-def d4_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+def descriptor_d4_cuberoot_tetra_volume(points: np.ndarray, n_samples: int, rng: np.random.Generator) -> np.ndarray:
     i1 = rng.integers(0, len(points), size=n_samples)
     i2 = rng.integers(0, len(points), size=n_samples)
     i3 = rng.integers(0, len(points), size=n_samples)
@@ -188,10 +135,9 @@ def d4_descriptor(points: np.ndarray, n_samples: int, rng: np.random.Generator) 
 # -----------------------------
 # Metrics (convex hull based)
 # -----------------------------
-def compute_base_metrics(original_mesh: trimesh.Trimesh) -> dict:
+def compute_convex_hull_metrics(original_mesh: trimesh.Trimesh) -> dict:
     """
-    Convex hull based metrics.
-    Fix: ensure volumes are non‑negative (abs) and clamp convexity to [0,1].
+    Convex hull based metrics. Volumes are non‑negative (abs) and convexity clamped to [0,1].
     """
     # Original (possibly non‑watertight) mesh volume (signed -> make positive)
     try:
@@ -267,14 +213,15 @@ def compute_base_metrics(original_mesh: trimesh.Trimesh) -> dict:
         "extents": hull_extents,
     }
 
+
 # -----------------------------
 # Histogram helpers
 # -----------------------------
-def fixed_bin_edges(bins_dict: Dict[str, int]) -> Dict[str, np.ndarray]:
+def make_fixed_bin_edges(bins_dict: Dict[str, int]) -> Dict[str, np.ndarray]:
     return {k: np.linspace(RANGES[k][0], RANGES[k][1], bins_dict[k] + 1) for k in RANGES.keys()}
 
 
-def hist_l1_normalized(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
+def l1_normalized_histogram(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
     eps = 1e-12
     x = np.clip(x, edges[0] + eps, edges[-1] - eps)
     counts, _ = np.histogram(x, bins=edges)
@@ -287,13 +234,13 @@ def hist_l1_normalized(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
 # -----------------------------
 # Single-file worker
 # -----------------------------
-def process_one(
-        obj_path: str,
-        rel_path: str,
-        out_path: str,
-        edges: Dict[str, np.ndarray],
-        n_samples: int,
-        surface_points: int
+def extract_features_for_single_mesh(
+    obj_path: str,
+    rel_path: str,
+    out_path: str,
+    edges: Dict[str, np.ndarray],
+    n_samples: int,
+    surface_points: int
 ) -> Tuple[str, bool, str]:
     try:
         mesh = trimesh.load(obj_path, force='mesh')
@@ -303,28 +250,25 @@ def process_one(
             except Exception:
                 geoms = getattr(mesh, 'geometry', {})
                 mesh = trimesh.util.concatenate(list(geoms.values()))
-        repair_mesh_inplace(mesh)
+        repair_mesh(mesh)
 
-        # Metrics now from convex hull; convexity uses original filled mesh volume
-        metrics = compute_base_metrics(mesh)
+        # Metrics now from convex hull; convexity uses original mesh volume
+        metrics = compute_convex_hull_metrics(mesh)
 
-        # Normalize (original mesh) for descriptors
-        mesh_n = normalize_mesh_unit_diameter(mesh)
+        rng = deterministic_rng_from_relpath(rel_path)
+        points = sample_surface_points_weighted(mesh, surface_points, rng)
 
-        rng = _rng_from_relpath(rel_path)
-        points = sample_surface_points(mesh_n, surface_points, rng)
+        d1 = descriptor_d1_distance_to_origin(points, n_samples, rng)
+        d2 = descriptor_d2_pairwise_distance(points, n_samples, rng)
+        a3 = descriptor_a3_triangle_angle_deg(points, n_samples, rng)
+        d3 = descriptor_d3_sqrt_triangle_area(points, n_samples, rng)
+        d4 = descriptor_d4_cuberoot_tetra_volume(points, n_samples, rng)
 
-        d1 = d1_descriptor(points, n_samples, rng)
-        d2 = d2_descriptor(points, n_samples, rng)
-        a3 = a3_descriptor(points, n_samples, rng)
-        d3 = d3_descriptor(points, n_samples, rng)
-        d4 = d4_descriptor(points, n_samples, rng)
-
-        d1_hist = hist_l1_normalized(d1, edges['D1'])
-        d2_hist = hist_l1_normalized(d2, edges['D2'])
-        a3_hist = hist_l1_normalized(a3, edges['A3'])
-        d3_hist = hist_l1_normalized(d3, edges['D3'])
-        d4_hist = hist_l1_normalized(d4, edges['D4'])
+        d1_hist = l1_normalized_histogram(d1, edges['D1'])
+        d2_hist = l1_normalized_histogram(d2, edges['D2'])
+        a3_hist = l1_normalized_histogram(a3, edges['A3'])
+        d3_hist = l1_normalized_histogram(d3, edges['D3'])
+        d4_hist = l1_normalized_histogram(d4, edges['D4'])
 
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
@@ -353,17 +297,17 @@ def process_one(
 # -----------------------------
 # Parallel extraction driver
 # -----------------------------
-def save_features_for_all_objects_txt(
-        base_dir: str = 'ShapeDatabase_INFOMR-master/after_remeshing_normalise',
-        features_dir: str = 'ShapeDatabase_INFOMR-master/features_test',
-        n_samples: int = 250000,
-        bins_dict: Dict[str, int] = None,
-        surface_points: int = 20000,
-        max_workers: int = max(1, os.cpu_count() or 1)
+def extract_features_for_all_meshes(
+    base_dir: str = 'ShapeDatabase_INFOMR-master/after_remeshing_normalise',
+    features_dir: str = 'ShapeDatabase_INFOMR-master/features_test',
+    n_samples: int = 250000,
+    bins_dict: Dict[str, int] = None,
+    surface_points: int = 20000,
+    max_workers: int = max(1, os.cpu_count() or 1)
 ) -> None:
     if bins_dict is None:
         bins_dict = DEFAULT_BINS.copy()
-    edges = fixed_bin_edges(bins_dict)
+    edges = make_fixed_bin_edges(bins_dict)
 
     tasks: List[Tuple[str, str, str]] = []
     for root, _, files in os.walk(base_dir):
@@ -384,7 +328,7 @@ def save_features_for_all_objects_txt(
 
     done = 0
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(process_one, obj, rel, outp, edges, n_samples, surface_points) for (obj, rel, outp) in tasks]
+        futs = [ex.submit(extract_features_for_single_mesh, obj, rel, outp, edges, n_samples, surface_points) for (obj, rel, outp) in tasks]
         for fut in as_completed(futs):
             obj_path, ok, err = fut.result()
             done += 1
@@ -396,7 +340,7 @@ def save_features_for_all_objects_txt(
 
 if __name__ == '__main__':
     # Windows-safe entry point
-    save_features_for_all_objects_txt(
+    extract_features_for_all_meshes(
         base_dir='ShapeDatabase_INFOMR-master/after_remeshing_normalise',
         features_dir='ShapeDatabase_INFOMR-master/features_test',
         # Higher quality sampling settings
