@@ -19,7 +19,7 @@ RANGES: Dict[str, Tuple[float, float]] = {
 }
 
 # Increased bin count for higher feature resolution.
-DEFAULT_BINS: Dict[str, int] = {k: 32 for k in RANGES.keys()}
+DEFAULT_BINS: Dict[str, int] = {k: 20 for k in RANGES.keys()}
 
 
 # -----------------------------
