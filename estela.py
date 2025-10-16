@@ -1,1 +1,1 @@
-ddtrdtrdtt
+print('ddtrdtrdtt')
