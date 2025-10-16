@@ -50,26 +50,9 @@ def fullnormalising_mesh(mesh_path, out_path=None):
     mesh.apply_translation(-centralized)
     #histogram_distance_centre_after.append(math.dist(mesh.centroid, [0, 0, 0]))
 
-    # 2. scaling
-    afbaken_box = mesh.bounds
-    grootte = afbaken_box[1] - afbaken_box[0]
-    langste = grootte.max()
-    #largest_bounding_box_dimension_before.append(langste)
-    if langste == 0:
-        print(f"SKIP invalid bbox: {mesh_path}")
-        return False
-
-    scale = 1.0 / langste
-    mesh.apply_scale(scale)
-    afbaken_box = mesh.bounds
-    grootte = afbaken_box[1] - afbaken_box[0]
-    langste = grootte.max()
-    #largest_bounding_box_dimension_after.append(langste)
-
-
     # vertices = mesh.vertices
 
-    #3. alignment
+    #2. alignment
     covariance_matrix = np.cov(mesh.vertices.T)
 
     matrix_eigenvalandvec = np.linalg.eigh(covariance_matrix)
@@ -103,6 +86,21 @@ def fullnormalising_mesh(mesh_path, out_path=None):
     aligned_vertices = np.column_stack((xi_updated, yi_updated, zi_updated))
     # #################vertices to mesh
     aligned_mesh = trimesh.Trimesh(vertices=aligned_vertices, faces=mesh.faces, process=False)
+
+    # 3. scaling
+    afbaken_box = aligned_mesh.bounds
+    grootte = afbaken_box[1] - afbaken_box[0]
+    langste = grootte.max()
+    # largest_bounding_box_dimension_before.append(langste)
+    if langste == 0:
+        print(f"SKIP invalid bbox: {mesh_path}")
+        return False
+
+    scale = 1.0 / langste
+    aligned_mesh.apply_scale(scale)
+    afbaken_box = aligned_mesh.bounds
+    grootte = afbaken_box[1] - afbaken_box[0]
+    langste = grootte.max()
 
     # covariance_matrix = np.cov(aligned_mesh.vertices.T)
     #
