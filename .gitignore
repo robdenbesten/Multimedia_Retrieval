@@ -1,0 +1,6 @@
+# Ignore copy files
+*_copy.txt
+
+# Ignore other temporary files if needed
+*.tmp
+*.temp
