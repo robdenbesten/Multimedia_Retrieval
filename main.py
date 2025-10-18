@@ -928,7 +928,7 @@ class CBSRApp(QWidget):
 
         # If auto-normalize is enabled, also normalize the display shape
         if self.auto_normalize_toggle.isChecked():
-            self.info_label.setText("Normalizing display, please wait...")
+            self.info_label.setText("Auto-normalizing, please wait...")
             QApplication.processEvents()
             
             # First resample to target vertices
