@@ -31,7 +31,7 @@ REMESHED_OUTPUT_FOLDER = 'ShapeDatabase_INFOMR-master/remeshed_5000'
 NORMALIZED_OUTPUT_FOLDER = 'ShapeDatabase_INFOMR-master/normalized_5000'
 
 # Step 3: Feature Extraction Settings
-FEATURES_OUTPUT_FOLDER = 'ShapeDatabase_INFOMR-master/Features'
+FEATURES_OUTPUT_FOLDER = 'ShapeDatabase_INFOMR-master'
 FEATURES_JSON_PATH = os.path.join(FEATURES_OUTPUT_FOLDER, 'features.json')
 
 

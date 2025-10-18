@@ -83,7 +83,7 @@ def metrics_barplot(metrics_list, labels, colors):
         'Rectangularity',
         'Diameter',
         'Convexity',
-        'Cccentricity'
+        'Eccentricity'
     ]
 
 

@@ -1,8 +1,8 @@
 import os
-import re
+import json
 import sys
+from typing import Callable, List, Dict
 import numpy as np
-from typing import Callable, List
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
     QMessageBox, QApplication
@@ -10,289 +10,366 @@ from PyQt6.QtWidgets import (
 from vedo import Plotter, Mesh, Text2D
 
 # -----------------------------
-# Feature parsing (histograms only)
+# Feature groups and constants
 # -----------------------------
-def parse_hist_file(file_path: str) -> np.ndarray:
-    """
-    Parse all 5 hist blocks into a single vector:
-      A3_hist, D1_hist, D2_hist, D3_hist, D4_hist
-    Robust to separators and whitespace. Pads missing blocks with zeros.
-    """
-    with open(file_path, 'r', newline='') as f:
-        content = f.read()
+HIST_KEYS = ['A3', 'D1', 'D2', 'D3', 'D4']
+HIST_BINS = 20
+SCALAR_KEYS = ['Surface area', 'Sphericity', 'Rectangularity', 'Diameter', 'Convexity', 'Eccentricity']
+FEATURE_GROUP_ORDER = HIST_KEYS + SCALAR_KEYS
+HIST_TOTAL_BINS = len(HIST_KEYS) * HIST_BINS
 
-    def extract_block(key: str) -> str:
-        pattern = rf'{key}\s*:\s*([\s\S]*?)(?=\n[A-Z]\d_hist\s*:|\Z)'
-        m = re.search(pattern, content, flags=re.MULTILINE)
-        return m.group(1) if m else ''
+EPS = 1e-10
 
-    def parse_block(block: str) -> List[float]:
-        block = block.replace('\r', '\n')
-        tokens = re.split(r'[,\s;]+', block.strip())
-        vals = []
-        for t in tokens:
-            if not t:
-                continue
-            try:
-                vals.append(float(t))
-            except ValueError:
-                pass
-        return vals
+def compute_group_slices() -> Dict[str, slice]:
+    """Computes the slice for each feature group in the concatenated vector."""
+    idx = 0
+    slices: Dict[str, slice] = {}
+    for hk in HIST_KEYS:
+        slices[hk] = slice(idx, idx + HIST_BINS)
+        idx += HIST_BINS
+    for sk in SCALAR_KEYS:
+        slices[sk] = slice(idx, idx + 1)
+        idx += 1
+    return slices
 
+GROUP_SLICES = compute_group_slices()
+
+# -----------------------------
+# Feature Parsing and Normalization
+# -----------------------------
+def parse_feature_from_entry(entry: Dict) -> np.ndarray:
+    """Parses a single entry from the JSON file into a raw feature vector."""
+    # 1. Histograms
     all_hist_values = []
-    for key in ['A3_hist', 'D1_hist', 'D2_hist', 'D3_hist', 'D4_hist']:
-        vals = parse_block(extract_block(key))
-        if not vals:
-            vals = [0.0] * 10
+    for key in HIST_KEYS:
+        vals = entry.get('histograms', {}).get(key, [0.0] * HIST_BINS)
+        if not vals or len(vals) != HIST_BINS:
+            vals = [0.0] * HIST_BINS
         all_hist_values.extend(vals)
+    # 2. Scalar features
+    scalar_values = []
+    for key in SCALAR_KEYS:
+        scalar_values.append(float(entry.get('metrics', {}).get(key, 0.0)))
+    # 3. Combine
+    feature_vector = np.array(all_hist_values + scalar_values, dtype=float)
+    feature_vector = np.nan_to_num(feature_vector, nan=0.0, posinf=0.0, neginf=0.0)
+    return feature_vector
 
-    arr = np.array(all_hist_values, dtype=float)
-    # Safety: ensure non-negative for EMD and numerical stability
-    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-    arr[arr < 0] = 0.0
-    return arr
+def normalize_features(features: np.ndarray) -> np.ndarray:
+    """
+    Normalizes feature vectors. Histograms are divided by sum, scalars by standardization.
+    """
+    norm_features = features.copy()
 
+    # 1. Normalize Histograms (by area/sum)
+    for i in range(norm_features.shape[0]): # For each shape
+        for key in HIST_KEYS:
+            sl = GROUP_SLICES[key]
+            hist_slice = norm_features[i, sl]
+            hist_sum = np.sum(hist_slice)
+            if hist_sum > 0:
+                norm_features[i, sl] = hist_slice / hist_sum
 
-def get_all_feature_files(root_dir: str) -> List[str]:
-    files = []
-    for subdir, _, filenames in os.walk(root_dir):
-        for fname in filenames:
-            if fname.lower().endswith('.txt'):
-                files.append(os.path.join(subdir, fname))
-    return files
+    # 2. Normalize Scalars (by standardization: (x - mean) / std_dev)
+    for key in SCALAR_KEYS:
+        sl = GROUP_SLICES[key]
+        scalar_column = norm_features[:, sl]
+        mean = np.mean(scalar_column)
+        std = np.std(scalar_column)
+        if std > 0:
+            norm_features[:, sl] = (scalar_column - mean) / std
+        else:
+            norm_features[:, sl] = 0.0 # All values are the same, so no variance
 
+    return norm_features
 
-def get_obj_path(feature_file_path: str) -> str:
-    base_path = feature_file_path.replace('features_test', 'original database')
-    if '_copy.txt' in base_path:
-        return base_path.replace('_copy.txt', '.obj')
-    return base_path.replace('.txt', '.obj')
-
+def get_obj_path(label: str, obj_root_dir: str) -> str:
+    """Constructs the full .obj path from a label and root directory."""
+    return os.path.join(obj_root_dir, label)
 
 # -----------------------------
-# Distance functions
+# Base Distance Functions
 # -----------------------------
-def distance_euclidean(a: np.ndarray, b: np.ndarray) -> float:
-    """L2 distance on equal-length vectors."""
-    if a.shape[0] != b.shape[0]:
-        L = min(a.shape[0], b.shape[0])
-        a, b = a[:L], b[:L]
-    diff = a - b
-    return float(np.sqrt(np.dot(diff, diff)))
+def l2(a: np.ndarray, b: np.ndarray) -> float:
+    d = a - b
+    return float(np.sqrt(np.dot(d, d)))
 
-
-def distance_manhattan(a: np.ndarray, b: np.ndarray) -> float:
-    """L1 distance on equal-length vectors."""
-    if a.shape[0] != b.shape[0]:
-        L = min(a.shape[0], b.shape[0])
-        a, b = a[:L], b[:L]
+def l1(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sum(np.abs(a - b)))
 
+def cosine_dist(a: np.ndarray, b: np.ndarray) -> float:
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    return 1.0 if na == 0.0 or nb == 0.0 else float(1.0 - (np.dot(a, b) / (na * nb)))
 
-def distance_emd_1d(a: np.ndarray, b: np.ndarray) -> float:
-    """
-    1D Earth Mover's Distance (EMD) for equal-binned histograms.
-    Implements EMD = sum(|CDF_a - CDF_b|) with unit bin cost.
-    Assumes non-negative entries. Normalizes to L1 mass=1 to be scale-invariant.
-    If length differs, uses the common prefix.
-    """
-    if a.shape[0] != b.shape[0]:
-        L = min(a.shape[0], b.shape[0])
-        a, b = a[:L], b[:L]
+def chi_squared_hist(a: np.ndarray, b: np.ndarray) -> float:
+    return float(0.5 * np.sum((a - b) ** 2 / (a + b + EPS)))
 
-    a = np.clip(a, 0.0, np.inf)
-    b = np.clip(b, 0.0, np.inf)
-    sa = float(np.sum(a))
-    sb = float(np.sum(b))
-    if sa > 0:
-        a = a / sa
-    if sb > 0:
-        b = b / sb
-    cdf_a = np.cumsum(a)
-    cdf_b = np.cumsum(b)
-    return float(np.sum(np.abs(cdf_a - cdf_b)))
+def kl_sym_hist(a: np.ndarray, b: np.ndarray) -> float:
+    kl_ab = np.sum(a * np.log((a + EPS) / (b + EPS)))
+    kl_ba = np.sum(b * np.log((b + EPS) / (a + EPS)))
+    return float(kl_ab + kl_ba)
+
+def emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.sum(np.abs(np.cumsum(a) - np.cumsum(b))))
+
+def _on_test_self_distance(self):
+    idx = self.cmb_file.currentIndex()
+    if idx < 0 or not hasattr(self, "_current_labels") or not self._current_labels:
+        QMessageBox.warning(self, "Warning", "Please select a valid category and file.")
+        return
+    query_label = self._current_labels[idx]
+    metric = self.cmb_metric.currentText()
+    query_idx = self.engine.labels.index(query_label)
+    q_vec = self.engine.features[query_idx]
+    dist = compute_weighted_distance(q_vec, q_vec, metric, self.engine.group_weights)
+    QMessageBox.information(self, "Self Distance", f"Distance to itself: {dist:.6f}")
+    # Show only the query in the viewer
+    show_results_ui(query_label, [], self.engine.obj_root_dir, title_suffix=f"Self distance: {dist:.6f}")
 
 
 # -----------------------------
-# Shape search (histogram-only)
+# Weight and Distance Aggregation
 # -----------------------------
-class DistanceOnlyShapeSearch:
-    def __init__(self, feature_dir: str):
-        self.feature_dir = feature_dir
-        self.files = get_all_feature_files(feature_dir)
-        if not self.files:
-            raise RuntimeError("No feature files found.")
+HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd'}
 
-        # Load histograms
-        hists = [parse_hist_file(f) for f in self.files]
-        # Make equal length by trimming to the shortest vector (robust across datasets)
-        min_len = min(h.shape[0] for h in hists)
-        self.histograms = np.stack([h[:min_len] for h in hists], axis=0)
-        self.length = min_len
+def normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[str, float]:
+    """Normalizes a weight dictionary to sum to 1."""
+    w = {k: max(0.0, float(weights.get(k, 0.0))) for k in allowed}
+    s = sum(w.values())
+    if s <= 0:
+        equal = 1.0 / len(allowed)
+        return {k: equal for k in allowed}
+    return {k: v / s for k, v in w.items()}
 
-        # Optional: store per-file basename for filtering query out
-        self._obj_basenames = [os.path.basename(get_obj_path(f)) for f in self.files]
+def compute_weighted_distance(a: np.ndarray, b: np.ndarray, metric: str, weights: Dict[str, float]) -> float:
+    """Computes the final distance as a weighted sum of per-group distances."""
+    groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
+    sub_weights = normalize_weights(weights, groups)
 
-        # Map string metric names to callables
+    dist_fn_map: Dict[str, Callable] = {
+        'euclidean': l2, 'manhattan': l1, 'cosine': cosine_dist,
+        'chi-squared': chi_squared_hist, 'kullback-leibler': kl_sym_hist, 'emd': emd_1d_hist
+    }
+    dist_fn = dist_fn_map.get(metric)
+    if not dist_fn:
+        raise ValueError(f"Unknown metric: {metric}")
+
+    total_dist = 0.0
+    for g in groups:
+        sl = GROUP_SLICES[g]
+        total_dist += sub_weights[g] * dist_fn(a[sl], b[sl])
+    return float(total_dist)
+
+# -----------------------------
+# Shape Search Engine
+# -----------------------------
+class ShapeSearchEngine:
+    def __init__(self, feature_json_path: str, obj_root_dir: str, group_weights: Dict[str, float]):
+        self.obj_root_dir = obj_root_dir
+        self.labels: List[str] = []
         self.metric_map = {
-            'euclidean': distance_euclidean,
-            'manhattan': distance_manhattan,
-            'emd': distance_emd_1d,
+            'euclidean': 'euclidean', 'manhattan': 'manhattan', 'cosine': 'cosine',
+            'emd': 'emd', 'chi-squared': 'chi-squared', 'kullback-leibler': 'kullback-leibler'
         }
+        self.group_weights = group_weights
 
-    def search(self, input_file: str, top_n: int = 5, metric: str | Callable[[np.ndarray, np.ndarray], float] = 'euclidean') -> List[str]:
-        q = parse_hist_file(input_file)
-        q = q[:self.length] if q.shape[0] >= self.length else np.pad(q, (0, self.length - q.shape[0]), mode='constant')
+        with open(feature_json_path, 'r') as f:
+            data = json.load(f)
 
-        if isinstance(metric, str):
-            if metric not in self.metric_map:
-                raise ValueError(f"Unknown metric: {metric}")
-            dist_fn = self.metric_map[metric]
-        else:
-            dist_fn = metric
+        raw_feats = []
+        for label, entry in data.items():
+            self.labels.append(label)
+            raw_feats.append(parse_feature_from_entry(entry))
 
-        # Compute distances
-        dists = np.array([dist_fn(q, h) for h in self.histograms], dtype=float)
+        if not raw_feats:
+            raise RuntimeError("No features loaded from JSON file.")
 
-        # Exclude the same basename as the query (if exists)
-        query_base = os.path.basename(get_obj_path(input_file))
+        # Normalize features at initialization
+        self.features = normalize_features(np.stack(raw_feats, axis=0))
+
+    def search(self, query_label: str, top_n: int = 5, metric: str = 'euclidean') -> List[str]:
+        if query_label not in self.labels:
+            raise ValueError(f"Query label '{query_label}' not found in dataset.")
+
+        query_idx = self.labels.index(query_label)
+        q_vec = self.features[query_idx]
+        metric_name = self.metric_map.get(metric)
+        if not metric_name:
+            raise ValueError(f"Unknown metric: {metric}")
+
+        dists = np.array([
+            compute_weighted_distance(q_vec, vec, metric_name, self.group_weights)
+            for vec in self.features
+        ], dtype=float)
+
         order = np.argsort(dists)
-        results = []
-        seen = set()
+        results: List[str] = []
         for idx in order:
-            base = self._obj_basenames[idx]
-            if base == query_base:
+            if idx == query_idx:
                 continue
-            if base in seen:
-                continue
-            results.append(self.files[idx])
-            seen.add(base)
-            if len(results) == top_n:
+            results.append(self.labels[idx])
+            if len(results) >= top_n:
                 break
         return results
 
-
 # -----------------------------
-# Visualization UI (metric selectable)
+# Visualization UI
 # -----------------------------
-def show_results_ui(query_feature_file: str, similar_feature_files: List[str], title_suffix: str):
-    query_obj_path = get_obj_path(query_feature_file)
-    similar_obj_paths = [get_obj_path(f) for f in similar_feature_files]
-
-    plt = Plotter(shape=(1, 6), sharecam=False, title=f"Shape Search ({title_suffix})")
-
-    plt.at(0)
-    if os.path.exists(query_obj_path):
-        query_mesh = Mesh(query_obj_path).c("blue").normalize()
-        plt.show(query_mesh, Text2D("Query", pos="bottom-center", s=0.8))
-    else:
-        plt.show(Text2D(f"Query not found:\n{os.path.basename(query_obj_path)}", pos="center", s=0.7))
-
-    for i, obj_path in enumerate(similar_obj_paths):
-        plt.at(i + 1)
-        if os.path.exists(obj_path):
-            res_mesh = Mesh(obj_path).c("green").normalize()
-            plt.show(res_mesh, Text2D(f"Result #{i + 1}", pos="bottom-center", s=0.8))
-        else:
-            plt.show(Text2D(f"Model not found:\n{os.path.basename(obj_path)}", pos="center", s=0.7))
-
-    plt.interactive()
-
-
 class ShapeSearchWindow(QWidget):
-    """Minimal UI: choose category, file, and distance metric."""
-    def __init__(self, engine: DistanceOnlyShapeSearch, feature_dir: str, default_metric: str = 'euclidean'):
+    def __init__(self, engine: ShapeSearchEngine, default_metric: str = 'euclidean'):
         super().__init__()
         self.engine = engine
-        self.feature_dir = feature_dir
-        self.setWindowTitle("Shape Search (Distance Only)")
-
+        self.setWindowTitle("Shape Search")
         layout = QVBoxLayout(self)
 
+        # Row setup
+        cat_row, file_row, met_row = QHBoxLayout(), QHBoxLayout(), QHBoxLayout()
+        layout.addLayout(cat_row)
+        layout.addLayout(file_row)
+        layout.addLayout(met_row)
+
         # Category
-        cat_row = QHBoxLayout()
         cat_row.addWidget(QLabel("Category:"))
         self.cmb_category = QComboBox()
         cat_row.addWidget(self.cmb_category)
-        layout.addLayout(cat_row)
 
         # File
-        file_row = QHBoxLayout()
         file_row.addWidget(QLabel("File:"))
         self.cmb_file = QComboBox()
         file_row.addWidget(self.cmb_file)
-        layout.addLayout(file_row)
 
         # Metric
-        met_row = QHBoxLayout()
         met_row.addWidget(QLabel("Metric:"))
         self.cmb_metric = QComboBox()
-        self.cmb_metric.addItems(['euclidean', 'manhattan', 'emd'])
-        if default_metric in ['euclidean', 'manhattan', 'emd']:
+        self.cmb_metric.addItems(sorted(self.engine.metric_map.keys()))
+        if default_metric in self.engine.metric_map:
             self.cmb_metric.setCurrentText(default_metric)
         met_row.addWidget(self.cmb_metric)
-        layout.addLayout(met_row)
 
-        # Action
+        # Actions
         self.btn_search = QPushButton("Search")
         layout.addWidget(self.btn_search)
 
-        # Data
-        self.category_to_files = self._build_category_map(self.engine.files)
-        self.cmb_category.addItems(sorted(self.category_to_files.keys()))
+        # Self-distance test button (fixed wiring)
+        self.btn_self_distance = QPushButton("Test Self-Distance")
+        layout.addWidget(self.btn_self_distance)
+        self.btn_self_distance.clicked.connect(self._on_test_self_distance)
 
-        # Hooks
+        # Data and hooks
+        self.category_to_labels = self._build_category_map(self.engine.labels)
+        self.cmb_category.addItems(sorted(self.category_to_labels.keys()))
         self.cmb_category.currentTextChanged.connect(self._on_category_changed)
         self.btn_search.clicked.connect(self._on_search_clicked)
 
         if self.cmb_category.count() > 0:
             self._on_category_changed(self.cmb_category.currentText())
 
-    def _build_category_map(self, file_paths: List[str]):
-        cat_map = {}
-        for f in file_paths:
-            rel = os.path.relpath(f, self.feature_dir)
-            parts = rel.split(os.sep)
+    def _build_category_map(self, labels: List[str]) -> Dict[str, List[str]]:
+        cat_map: Dict[str, List[str]] = {}
+        for label in labels:
+            parts = label.split(os.sep)
             cat = parts[0] if len(parts) > 1 else "(root)"
-            cat_map.setdefault(cat, []).append(f)
+            cat_map.setdefault(cat, []).append(label)
         return cat_map
 
     def _on_category_changed(self, category: str):
-        files = sorted(self.category_to_files.get(category, []))
-        self._current_files = files
+        self._current_labels = sorted(self.category_to_labels.get(category, []))
         self.cmb_file.clear()
-        self.cmb_file.addItems([os.path.basename(f) for f in files])
+        self.cmb_file.addItems([os.path.basename(label) for label in self._current_labels])
 
     def _on_search_clicked(self):
         idx = self.cmb_file.currentIndex()
-        if idx < 0 or not hasattr(self, "_current_files") or not self._current_files:
+        if idx < 0 or not hasattr(self, "_current_labels") or not self._current_labels:
             QMessageBox.warning(self, "Warning", "Please select a valid category and file.")
             return
-        input_file = self._current_files[idx]
+        query_label = self._current_labels[idx]
         metric = self.cmb_metric.currentText()
         try:
-            results = self.engine.search(input_file, top_n=5, metric=metric)
+            results = self.engine.search(query_label, top_n=5, metric=metric)
             if not results:
                 QMessageBox.information(self, "Info", "No similar models found.")
                 return
-            show_results_ui(input_file, results, title_suffix=metric)
+            show_results_ui(query_label, results, self.engine.obj_root_dir, title_suffix=metric)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Search failed:\n{e}")
 
+    def _on_test_self_distance(self):
+        # Compute and display distance of the selected item to itself
+        idx = self.cmb_file.currentIndex()
+        if idx < 0 or not hasattr(self, "_current_labels") or not self._current_labels:
+            QMessageBox.warning(self, "Warning", "Please select a valid category and file.")
+            return
+
+        query_label = self._current_labels[idx]
+        metric = self.cmb_metric.currentText()
+        query_idx = self.engine.labels.index(query_label)
+        q_vec = self.engine.features[query_idx]
+
+        dist = compute_weighted_distance(q_vec, q_vec, metric, self.engine.group_weights)
+        QMessageBox.information(self, "Self Distance", f"Distance to itself: {dist:.6f}")
+
+        # Show only the query in the viewer
+        show_results_ui(query_label, [], self.engine.obj_root_dir, title_suffix=f"Self distance: {dist:.6f}")
+
+def show_results_ui(query_label: str, similar_labels: List[str], obj_root_dir: str, title_suffix: str):
+    query_obj_path = get_obj_path(query_label, obj_root_dir)
+    similar_obj_paths = [get_obj_path(label, obj_root_dir) for label in similar_labels]
+    plt = Plotter(shape=(1, 6), sharecam=False, title=f"Shape Search ({title_suffix})")
+
+    plt.at(0).show(
+        Mesh(query_obj_path).c("blue").normalize() if os.path.exists(query_obj_path) else Text2D("Query not found"),
+        Text2D("Query", pos="bottom-center", s=0.8)
+    )
+    for i, obj_path in enumerate(similar_obj_paths):
+        plt.at(i + 1).show(
+            Mesh(obj_path).c("green").normalize() if os.path.exists(obj_path) else Text2D("Model not found"),
+            Text2D(f"Result #{i + 1}", pos="bottom-center", s=0.8)
+        )
+    plt.interactive()
 
 # -----------------------------
-# Main (choose the distance function here)
+# Main Configuration and Execution
 # -----------------------------
 if __name__ == '__main__':
-    # Select the distance function globally here for default UI selection:
-    # Options: 'euclidean', 'manhattan', 'emd'
+    # --- 1. CONFIGURE FILE PATHS ---
+    FEATURE_JSON = 'ShapeDatabase_INFOMR-master/features.json'
+    OBJ_ROOT_DIR = 'ShapeDatabase_INFOMR-master/normalized_5000'
+
+    # --- 2. ADJUST FEATURE WEIGHTS HERE ---
+    # The weights will be automatically normalized to sum to 1.
+    # You can give a feature zero weight by setting it to 0.0.
+    MANUAL_WEIGHTS = {
+        # Histograms
+        'A3': 1.5,
+        'D1': 2.0,
+        'D2': 1.5,
+        'D3': 1.0,
+        'D4': 1.0,
+        # Scalars
+        'Surface area': 1.2,
+        'Sphericity': 1.0,
+        'Rectangularity': 1.0,
+        'Diameter': 1.0,
+        'Convexity': 1.0,
+        'Eccentricity': 1.0,
+    }
+
+    # --- 3. SET DEFAULTS ---
     DEFAULT_METRIC = 'euclidean'
 
-    FEATURE_DIR = 'ShapeDatabase_INFOMR-master/features_test'
+    # --- EXECUTION ---
+    if not os.path.exists(FEATURE_JSON):
+        QMessageBox.critical(None, "Error", f"Feature file not found at '{FEATURE_JSON}'")
+        sys.exit(1)
 
     app = QApplication.instance() or QApplication(sys.argv)
-    engine = DistanceOnlyShapeSearch(FEATURE_DIR)
-    win = ShapeSearchWindow(engine, FEATURE_DIR, default_metric=DEFAULT_METRIC)
-    win.resize(520, 160)
-    win.show()
-    sys.exit(app.exec())
+    try:
+        engine = ShapeSearchEngine(FEATURE_JSON, OBJ_ROOT_DIR, MANUAL_WEIGHTS)
+        win = ShapeSearchWindow(engine, default_metric=DEFAULT_METRIC)
+        win.resize(520, 160)
+        win.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        QMessageBox.critical(None, "Initialization Error", f"Failed to initialize the application:\n{e}")
+        sys.exit(1)
