@@ -298,8 +298,8 @@ def extract_features_for_single_mesh(
 # Parallel extraction driver
 # -----------------------------
 def extract_features_for_all_meshes(
-    base_dir: str = 'ShapeDatabase_INFOMR-master/after_remeshing_normalise',
-    features_dir: str = 'ShapeDatabase_INFOMR-master/features_test',
+    base_dir: str = 'ShapeDatabase_INFOMR-master/remeshing_flipping1',
+    features_dir: str = 'ShapeDatabase_INFOMR-master/Features',
     n_samples: int = 250000,
     bins_dict: Dict[str, int] = None,
     surface_points: int = 20000,
@@ -342,7 +342,7 @@ if __name__ == '__main__':
     # Windows-safe entry point
     extract_features_for_all_meshes(
         base_dir='ShapeDatabase_INFOMR-master/after_remeshing_normalise',
-        features_dir='ShapeDatabase_INFOMR-master/features_test',
+        features_dir='ShapeDatabase_INFOMR-master/Features',
         # Higher quality sampling settings
         n_samples=250000,
         surface_points=5000,

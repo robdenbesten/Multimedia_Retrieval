@@ -1,59 +1,31 @@
 import os
+import json
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-def parse_histograms(txt_path):
-    wanted = {'D1', 'D2', 'A3', 'D3', 'D4'}
-    out = {}
-    current = None
-    try:
-        with open(txt_path, 'r', encoding='utf-8') as f:
-            for raw in f:
-                line = raw.strip()
-                if line.endswith('_hist:'):
-                    key = line.replace('_hist:', '')
-                    current = key if key in wanted else None
-                    continue
-                if current and line:
-                    parts = [p for p in line.replace(';', ',').split(',') if p.strip() != '']
-                    if len(parts) == 1 and ' ' in line:
-                        parts = [p for p in line.split() if p.strip() != '']
-                    vals = []
-                    for p in parts:
-                        try:
-                            vals.append(float(p))
-                        except ValueError:
-                            pass
-                    if vals:
-                        out[current] = np.asarray(vals, dtype=float)
-                    current = None
-    except Exception:
-        pass
-    return out
-
-def collect_category_data(base_dir):
+def collect_category_data(all_features: dict):
+    """Collects histogram data from the features dictionary, grouped by category."""
     descriptors = ['D1', 'D2', 'A3', 'D3', 'D4']
     data = {d: defaultdict(list) for d in descriptors}
 
-    if not os.path.isdir(base_dir):
-        raise FileNotFoundError(f'Base dir not found: {base_dir}')
+    for rel_path, features in all_features.items():
+        # Extract category from relative path (e.g., 'ants' from 'ants/D00004.obj')
+        category = os.path.dirname(rel_path)
+        if not category:
+            continue
 
-    for cat in sorted([d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]):
-        cat_dir = os.path.join(base_dir, cat)
-        for root, _, files in os.walk(cat_dir):
-            for file in files:
-                if not file.lower().endswith('.txt'):
-                    continue
-                fpath = os.path.join(root, file)
-                hists = parse_histograms(fpath)
-                for d in descriptors:
-                    if d in hists:
-                        data[d][cat].append(hists[d])
+        if 'histograms' in features:
+            for d in descriptors:
+                if d in features['histograms']:
+                    # Convert list back to numpy array for processing/plotting
+                    hist_array = np.asarray(features['histograms'][d], dtype=float)
+                    data[d][category].append(hist_array)
     return data
 
 def plot_descriptor_grid(descriptor, cat_to_arrays, out_dir, linewidth=0.9):
+    """Plots a grid of histograms for a given descriptor, one subplot per category."""
     cats = sorted(cat_to_arrays.keys())
     if not cats:
         return
@@ -97,54 +69,58 @@ def plot_descriptor_grid(descriptor, cat_to_arrays, out_dir, linewidth=0.9):
     plt.close(fig)
     print(f'Saved {descriptor} figure to: {out_path}')
 
-def collect_convexity_values(base_dir):
-    convexities = []
-    for root, _, files in os.walk(base_dir):
-        for file in files:
-            if not file.lower().endswith('.txt'):
-                continue
-            fpath = os.path.join(root, file)
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if line.strip().startswith('Convexity:'):
-                            try:
-                                val = float(line.split(':', 1)[1].strip())
-                                convexities.append(val)
-                            except Exception:
-                                pass
-                            break
-            except Exception:
-                pass
-    return convexities
+def collect_metric_values(all_features: dict, metric_name: str):
+    """Collects all values for a given numerical metric from the features dictionary."""
+    values = []
+    for features in all_features.values():
+        if 'metrics' in features and metric_name in features['metrics']:
+            value = features['metrics'][metric_name]
+            # Ensure the metric is a number (not a list like 'extents')
+            if isinstance(value, (int, float)):
+                values.append(value)
+    return values
 
-def plot_convexity_histogram(convexities, out_dir):
-    if not convexities:
-        print('No convexity values found.')
+def plot_metric_histogram(values, metric_name, out_dir):
+    """Plots a single histogram for a given numerical metric."""
+    if not values:
+        print(f'No values found for metric: {metric_name}')
         return
     os.makedirs(out_dir, exist_ok=True)
     plt.figure(figsize=(7, 4))
-    plt.hist(convexities, bins=40, color='teal', edgecolor='black', alpha=0.8)
-    plt.title('Convexity Distribution (all objects)')
-    plt.xlabel('Convexity')
+    plt.hist(values, bins=40, color='teal', edgecolor='black', alpha=0.8)
+    plt.title(f'{metric_name.capitalize()} Distribution (all objects)')
+    plt.xlabel(metric_name.capitalize())
     plt.ylabel('Count')
     plt.tight_layout()
-    out_path = os.path.join(out_dir, 'convexity_histogram.png')
+    out_path = os.path.join(out_dir, f'{metric_name}_histogram.png')
     plt.savefig(out_path, dpi=200)
     plt.close()
-    print(f'Saved convexity histogram to: {out_path}')
+    print(f'Saved {metric_name} histogram to: {out_path}')
 
 def main():
-    base_dir = os.path.join('ShapeDatabase_INFOMR-master', 'features_test')
+    """Loads features from JSON and generates plots."""
+    json_path = os.path.join('ShapeDatabase_INFOMR-master', 'Features', 'features.json')
     out_dir = 'plots'
 
-    data = collect_category_data(base_dir)
-    for descriptor, cat_to_arrays in data.items():
+    if not os.path.exists(json_path):
+        print(f"Error: JSON file not found at '{json_path}'")
+        return
+
+    print(f"Loading features from '{json_path}'...")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        all_features = json.load(f)
+    print(f"Loaded data for {len(all_features)} meshes.")
+
+    # Generate descriptor plots
+    hist_data = collect_category_data(all_features)
+    for descriptor, cat_to_arrays in hist_data.items():
         plot_descriptor_grid(descriptor, cat_to_arrays, out_dir)
 
-    # Add convexity plot
-    convexities = collect_convexity_values(base_dir)
-    plot_convexity_histogram(convexities, out_dir)
+    # Generate histograms for specified numerical metrics
+    metrics_to_plot = ['convexity', 'compactness', 'sphericity']
+    for metric in metrics_to_plot:
+        values = collect_metric_values(all_features, metric)
+        plot_metric_histogram(values, metric, out_dir)
 
 if __name__ == '__main__':
     main()
