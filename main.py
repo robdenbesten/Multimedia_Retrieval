@@ -382,7 +382,7 @@ class CBSRApp(QWidget):
         self.darkmode_toggle.stateChanged.connect(self.on_darkmode_toggle)
         panel.addWidget(self.darkmode_toggle)
 
-        self.auto_normalize_toggle = QCheckBox("Auto-Normalize")
+        self.auto_normalize_toggle = QCheckBox("Normalize")
         self.auto_normalize_toggle.stateChanged.connect(self.on_auto_normalize_toggle)
         panel.addWidget(self.auto_normalize_toggle)
         return panel
@@ -426,17 +426,17 @@ class CBSRApp(QWidget):
 
         # If auto-normalize is enabled, normalize the shape before displaying
         if self.auto_normalize_toggle.isChecked():
-            self.info_label.setText("Auto-normalizing, please wait...")
+            self.info_label.setText("Normalizing, please wait...")
             QApplication.processEvents()
             
             # First resample to target vertices
             if not shape.resample():
-                self.info_label.setText("Auto-normalize failed: Remeshing step failed.")
+                self.info_label.setText("Normalize failed: Remeshing step failed.")
                 return
             
             # Then normalize
             if not shape.normalize():
-                self.info_label.setText("Auto-normalize failed: Normalization step failed.")
+                self.info_label.setText("Normalize failed: Normalization step failed.")
                 return
 
         self.plotter.clear()
@@ -450,8 +450,8 @@ class CBSRApp(QWidget):
         self.plotter.show(shape.mesh, resetcam=True)
         self.current_mesh_actor = shape.mesh
 
-        status_text = "(Auto-Normalized) " if self.auto_normalize_toggle.isChecked() else ""
-        self.info_label.setText(f"{status_text}File: {item.text()}\nVertices: {shape.vertices}\nFaces: {shape.faces}")
+        status_text = "(Normalized) " if self.auto_normalize_toggle.isChecked() else ""
+        self.info_label.setText(f"{status_text}File: {item.text()}\nVertices: {shape.vertices}")
         self.bbox_toggle.setChecked(self.show_bbox_preference)
         self.reference_toggle.setChecked(self.show_reference_preference)
         
@@ -471,6 +471,12 @@ class CBSRApp(QWidget):
         # Remember the user's preference
         self.show_bbox_preference = bool(state)
             
+        # Always remove existing dimension info first (to prevent stacking)
+        current_info = self.info_label.text()
+        lines = current_info.split('\n')
+        filtered_lines = [line for line in lines if not (line.startswith('BBox:') or line.startswith('[X='))]
+        base_info = '\n'.join(filtered_lines)
+        
         if state:
             try:
                 # Create bounding box
@@ -483,10 +489,9 @@ class CBSRApp(QWidget):
                 y_size = bounds[3] - bounds[2]  # ymax - ymin
                 z_size = bounds[5] - bounds[4]  # zmax - zmin
                 
-                # Update info label with dimensions
-                current_info = self.info_label.text()
-                dimension_info = f"\nBBox: X={x_size:.2f}, Y={y_size:.2f}, Z={z_size:.2f}"
-                self.info_label.setText(current_info + dimension_info)
+                # Add dimension info to clean base info
+                dimension_info = f"\n[X={x_size:.2f}, Y={y_size:.2f}, Z={z_size:.2f}]"
+                self.info_label.setText(base_info + dimension_info)
                 
                 # Store that we have labels (for cleanup)
                 self.bbox_labels = ['info_updated']
@@ -503,14 +508,8 @@ class CBSRApp(QWidget):
                     print(f"Error removing bounding box: {e}")
                 self.bbox_actor = None
             
-            # Remove dimension info from label
-            if self.bbox_labels:
-                current_info = self.info_label.text()
-                # Remove the bbox info line if it exists
-                lines = current_info.split('\n')
-                filtered_lines = [line for line in lines if not line.startswith('BBox:')]
-                self.info_label.setText('\n'.join(filtered_lines))
-            
+            # Set info label to clean base info (dimensions already removed above)
+            self.info_label.setText(base_info)
             self.bbox_labels = []
             
         try:
@@ -627,7 +626,7 @@ class CBSRApp(QWidget):
             
             self.info_label.setText(f"Cleaned successfully!\n"
                                    f"File: {os.path.basename(shape.file_path)}\n"
-                                   f"Vertices: {shape.vertices}\nFaces: {shape.faces}")
+                                   f"Vertices: {shape.vertices}")
             
         except Exception as e:
             print(f"Unexpected error during cleaning: {e}")
@@ -639,9 +638,9 @@ class CBSRApp(QWidget):
         # If no shape is currently loaded, just update the status message
         if not self.loaded_shapes:
             if state:
-                self.info_label.setText("Auto-normalize enabled. Select a file to see normalized version.")
+                self.info_label.setText("Normalize enabled. Select a file to see normalized version.")
             else:
-                self.info_label.setText("Auto-normalize disabled. Objects will be shown as original.")
+                self.info_label.setText("Normalize disabled. Objects will be shown as original.")
             return
         
         # Get the current shape
@@ -658,17 +657,17 @@ class CBSRApp(QWidget):
             
             # Normalize the temp shape
             if not temp_shape.resample():
-                self.info_label.setText("Auto-normalize failed: Remeshing step failed.")
+                self.info_label.setText("Normalize failed: Remeshing step failed.")
                 return
             
             if not temp_shape.normalize():
-                self.info_label.setText("Auto-normalize failed: Normalization step failed.")
+                self.info_label.setText("Normalize failed: Normalization step failed.")
                 return
             
             # Update the loaded shape with normalized version
             self.loaded_shapes[-1] = temp_shape
             current_shape = temp_shape
-            status_prefix = "(Auto-Normalized) "
+            status_prefix = "(Normalized) "
         else:
             # Checkbox unchecked - reload original version
             self.info_label.setText("Loading original object...")
@@ -698,7 +697,7 @@ class CBSRApp(QWidget):
         
         # Update info label
         filename = os.path.basename(current_shape.file_path)
-        self.info_label.setText(f"{status_prefix}File: {filename}\nVertices: {current_shape.vertices}\nFaces: {current_shape.faces}")
+        self.info_label.setText(f"{status_prefix}File: {filename}\nVertices: {current_shape.vertices}")
         
         # Re-apply bounding box if it was previously shown
         if self.show_bbox_preference:
