@@ -294,6 +294,7 @@ class CBSRApp(QWidget):
         self.loaded_shapes = []
         self.current_mesh_actor = None
         self.bbox_actor = None
+        self.bbox_labels = []
         self.origin_axes = None
         self.show_bbox_preference = False
         self.show_reference_preference = True
@@ -315,7 +316,7 @@ class CBSRApp(QWidget):
             self.on_category_changed(self.categories[0])
 
     def _create_origin_axes(self) -> None:
-        """Create origin axes (X=red, Y=green, Z=blue) and unit cube."""
+        """Create origin axes (X=red, Y=green, Z=blue)."""
         # X-axis: red line
         x_axis = Line([0, 0, 0], [0.5, 0, 0]).c('red').lw(1)
         
@@ -325,11 +326,8 @@ class CBSRApp(QWidget):
         # Z-axis: blue line
         z_axis = Line([0, 0, 0], [0, 0, 0.5]).c('blue').lw(1)
         
-        # Unit cube: wireframe cube with side length 1, centered at origin
-        unit_cube = Box(pos=[0.0, 0.0, 0.0], size=[1, 1, 1]).wireframe().c('gray').alpha(0.1)
-        
-        # Combine all reference objects
-        self.origin_axes = [x_axis, y_axis, z_axis, unit_cube]
+        # Combine all reference objects (only axes, no cube)
+        self.origin_axes = [x_axis, y_axis, z_axis]
         
         # Add reference objects to plotter
         for obj in self.origin_axes:
@@ -375,7 +373,7 @@ class CBSRApp(QWidget):
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
         panel.addWidget(self.bbox_toggle)
 
-        self.reference_toggle = QCheckBox("Show Reference (Cube + Axes)")
+        self.reference_toggle = QCheckBox("Show Reference Axes")
         self.reference_toggle.stateChanged.connect(self.on_reference_toggle)
         self.reference_toggle.setChecked(self.show_reference_preference)
         panel.addWidget(self.reference_toggle)
@@ -384,9 +382,9 @@ class CBSRApp(QWidget):
         self.darkmode_toggle.stateChanged.connect(self.on_darkmode_toggle)
         panel.addWidget(self.darkmode_toggle)
 
-        self.clean_button = QPushButton("Normalized")
-        self.clean_button.clicked.connect(self.on_clean_clicked)
-        panel.addWidget(self.clean_button)
+        self.auto_normalize_toggle = QCheckBox("Auto-Normalize")
+        self.auto_normalize_toggle.stateChanged.connect(self.on_auto_normalize_toggle)
+        panel.addWidget(self.auto_normalize_toggle)
         return panel
 
     def _create_gallery_panel(self) -> QVBoxLayout:
@@ -426,6 +424,21 @@ class CBSRApp(QWidget):
         shape.load()
         self.loaded_shapes.append(shape)
 
+        # If auto-normalize is enabled, normalize the shape before displaying
+        if self.auto_normalize_toggle.isChecked():
+            self.info_label.setText("Auto-normalizing, please wait...")
+            QApplication.processEvents()
+            
+            # First resample to target vertices
+            if not shape.resample():
+                self.info_label.setText("Auto-normalize failed: Remeshing step failed.")
+                return
+            
+            # Then normalize
+            if not shape.normalize():
+                self.info_label.setText("Auto-normalize failed: Normalization step failed.")
+                return
+
         self.plotter.clear()
         # Re-add origin axes after clearing (only if reference toggle is on)
         if self.show_reference_preference:
@@ -437,7 +450,8 @@ class CBSRApp(QWidget):
         self.plotter.show(shape.mesh, resetcam=True)
         self.current_mesh_actor = shape.mesh
 
-        self.info_label.setText(f"File: {item.text()}\nVertices: {shape.vertices}\nFaces: {shape.faces}")
+        status_text = "(Auto-Normalized) " if self.auto_normalize_toggle.isChecked() else ""
+        self.info_label.setText(f"{status_text}File: {item.text()}\nVertices: {shape.vertices}\nFaces: {shape.faces}")
         self.bbox_toggle.setChecked(self.show_bbox_preference)
         self.reference_toggle.setChecked(self.show_reference_preference)
         
@@ -450,7 +464,7 @@ class CBSRApp(QWidget):
             self.on_reference_toggle(False)
 
     def on_bbox_toggle(self, state) -> None:
-        """Toggle bounding box display."""
+        """Toggle bounding box display with dimension labels."""
         if not self.current_mesh_actor:
             return
         
@@ -458,13 +472,51 @@ class CBSRApp(QWidget):
         self.show_bbox_preference = bool(state)
             
         if state:
-            self.bbox_actor = Box(self.current_mesh_actor.bounds()).wireframe().c('red')
-            self.plotter.add(self.bbox_actor)
+            try:
+                # Create bounding box
+                bounds = self.current_mesh_actor.bounds()
+                self.bbox_actor = Box(bounds).wireframe().c('grey')
+                self.plotter.add(self.bbox_actor)
+                
+                # Calculate dimensions
+                x_size = bounds[1] - bounds[0]  # xmax - xmin
+                y_size = bounds[3] - bounds[2]  # ymax - ymin
+                z_size = bounds[5] - bounds[4]  # zmax - zmin
+                
+                # Update info label with dimensions
+                current_info = self.info_label.text()
+                dimension_info = f"\nBBox: X={x_size:.2f}, Y={y_size:.2f}, Z={z_size:.2f}"
+                self.info_label.setText(current_info + dimension_info)
+                
+                # Store that we have labels (for cleanup)
+                self.bbox_labels = ['info_updated']
+                
+            except Exception as e:
+                print(f"Error creating bounding box: {e}")
+                self.info_label.setText(f"Bounding box error: {str(e)}")
         else:
+            # Remove bounding box
             if self.bbox_actor:
-                self.plotter.remove(self.bbox_actor)
+                try:
+                    self.plotter.remove(self.bbox_actor)
+                except Exception as e:
+                    print(f"Error removing bounding box: {e}")
                 self.bbox_actor = None
-        self.plotter.render()
+            
+            # Remove dimension info from label
+            if self.bbox_labels:
+                current_info = self.info_label.text()
+                # Remove the bbox info line if it exists
+                lines = current_info.split('\n')
+                filtered_lines = [line for line in lines if not line.startswith('BBox:')]
+                self.info_label.setText('\n'.join(filtered_lines))
+            
+            self.bbox_labels = []
+            
+        try:
+            self.plotter.render()
+        except Exception as e:
+            print(f"Error rendering: {e}")
 
     def on_reference_toggle(self, state) -> None:
         """Toggle reference objects (unit cube and axes) display."""
@@ -582,6 +634,76 @@ class CBSRApp(QWidget):
             self.info_label.setText(f"Cleaning failed: Unexpected error.\nCheck console for details.\nError: {str(e)}")
             return
 
+    def on_auto_normalize_toggle(self, state) -> None:
+        """Handle auto-normalize checkbox state change and immediately update viewer."""
+        # If no shape is currently loaded, just update the status message
+        if not self.loaded_shapes:
+            if state:
+                self.info_label.setText("Auto-normalize enabled. Select a file to see normalized version.")
+            else:
+                self.info_label.setText("Auto-normalize disabled. Objects will be shown as original.")
+            return
+        
+        # Get the current shape
+        current_shape = self.loaded_shapes[-1]
+        
+        if state:
+            # Checkbox checked - show normalized version
+            self.info_label.setText("Normalizing current object, please wait...")
+            QApplication.processEvents()
+            
+            # Create a fresh copy of the shape for normalization
+            temp_shape = Shape(current_shape.file_path)
+            temp_shape.load()
+            
+            # Normalize the temp shape
+            if not temp_shape.resample():
+                self.info_label.setText("Auto-normalize failed: Remeshing step failed.")
+                return
+            
+            if not temp_shape.normalize():
+                self.info_label.setText("Auto-normalize failed: Normalization step failed.")
+                return
+            
+            # Update the loaded shape with normalized version
+            self.loaded_shapes[-1] = temp_shape
+            current_shape = temp_shape
+            status_prefix = "(Auto-Normalized) "
+        else:
+            # Checkbox unchecked - reload original version
+            self.info_label.setText("Loading original object...")
+            QApplication.processEvents()
+            
+            # Reload the original shape
+            original_shape = Shape(current_shape.file_path)
+            original_shape.load()
+            
+            # Update the loaded shape with original version
+            self.loaded_shapes[-1] = original_shape
+            current_shape = original_shape
+            status_prefix = ""
+        
+        # Clear and redisplay the mesh
+        self.plotter.clear()
+        
+        # Re-add origin axes after clearing (only if reference toggle is on)
+        if self.show_reference_preference:
+            for axis in self.origin_axes:
+                self.plotter.add(axis)
+        
+        # Display mesh with lighting enabled
+        current_shape.mesh.lighting('default').linecolor('black').linewidth(1)
+        self.plotter.show(current_shape.mesh, resetcam=True)
+        self.current_mesh_actor = current_shape.mesh
+        
+        # Update info label
+        filename = os.path.basename(current_shape.file_path)
+        self.info_label.setText(f"{status_prefix}File: {filename}\nVertices: {current_shape.vertices}\nFaces: {current_shape.faces}")
+        
+        # Re-apply bounding box if it was previously shown
+        if self.show_bbox_preference:
+            self.on_bbox_toggle(True)
+
     def _list_obj_files_in_current_category(self) -> List[str]:
         """List absolute paths to .obj files in the current category."""
         if not getattr(self, 'current_category', None):
@@ -661,6 +783,7 @@ class CBSRApp(QWidget):
             self.loaded_shapes.clear()
             self.current_mesh_actor = None
             self.bbox_actor = None
+            self.bbox_labels = []
             self.origin_axes = None
             
             # Force garbage collection
