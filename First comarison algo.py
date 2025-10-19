@@ -1,3 +1,4 @@
+# python
 import os
 import json
 import sys
@@ -17,6 +18,8 @@ HIST_BINS = 20
 SCALAR_KEYS = ['Surface area', 'Sphericity', 'Rectangularity', 'Diameter', 'Convexity', 'Eccentricity']
 FEATURE_GROUP_ORDER = HIST_KEYS + SCALAR_KEYS
 HIST_TOTAL_BINS = len(HIST_KEYS) * HIST_BINS
+CROSS_BIN_SIGMA = 1.5   # neighborhood width in bins (tune as needed)
+CROSS_BIN_P = 1.0       # p in the formula; try 1.0 or 2.0
 
 EPS = 1e-10
 
@@ -62,7 +65,7 @@ def normalize_features(features: np.ndarray) -> np.ndarray:
     norm_features = features.copy()
 
     # 1. Normalize Histograms (by area/sum)
-    for i in range(norm_features.shape[0]): # For each shape
+    for i in range(norm_features.shape[0]):  # For each shape
         for key in HIST_KEYS:
             sl = GROUP_SLICES[key]
             hist_slice = norm_features[i, sl]
@@ -79,7 +82,7 @@ def normalize_features(features: np.ndarray) -> np.ndarray:
         if std > 0:
             norm_features[:, sl] = (scalar_column - mean) / std
         else:
-            norm_features[:, sl] = 0.0 # All values are the same, so no variance
+            norm_features[:, sl] = 0.0  # All values are the same, so no variance
 
     return norm_features
 
@@ -113,25 +116,46 @@ def kl_sym_hist(a: np.ndarray, b: np.ndarray) -> float:
 def emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sum(np.abs(np.cumsum(a) - np.cumsum(b))))
 
-def _on_test_self_distance(self):
-    idx = self.cmb_file.currentIndex()
-    if idx < 0 or not hasattr(self, "_current_labels") or not self._current_labels:
-        QMessageBox.warning(self, "Warning", "Please select a valid category and file.")
-        return
-    query_label = self._current_labels[idx]
-    metric = self.cmb_metric.currentText()
-    query_idx = self.engine.labels.index(query_label)
-    q_vec = self.engine.features[query_idx]
-    dist = compute_weighted_distance(q_vec, q_vec, metric, self.engine.group_weights)
-    QMessageBox.information(self, "Self Distance", f"Distance to itself: {dist:.6f}")
-    # Show only the query in the viewer
-    show_results_ui(query_label, [], self.engine.obj_root_dir, title_suffix=f"Self distance: {dist:.6f}")
+def make_cross_bin_kernel(n: int, sigma: float = 1.5, normalize: bool = True) -> np.ndarray:
+    """
+    Build an n×n kernel W with weights for cross-bin matching.
+    By default uses a Gaussian on bin index distance.
+    """
+    idx = np.arange(n)
+    # Gaussian weights by bin distance
+    W = np.exp(-0.5 * ((idx[:, None] - idx[None, :]) / max(sigma, 1e-12)) ** 2)
+    if normalize:
+        s = W.sum()
+        if s > 0:
+            W /= s
+    return W
 
+# Global kernel for all histogram groups (all histograms have HIST_BINS bins)
+CROSS_BIN_W = make_cross_bin_kernel(HIST_BINS, sigma=CROSS_BIN_SIGMA, normalize=True)
+
+def cross_bin_hist(a: np.ndarray, b: np.ndarray, W: np.ndarray = CROSS_BIN_W, p: float = CROSS_BIN_P) -> float:
+    """
+    Cross-bin histogram distance:
+        d(H1,H2) = ( sum_i sum_j w_ij * |H1[i] - H2[j]|^p )^(1/p)
+    a, b: 1D histograms of same length
+    W:    n×n nonnegative weights (ideally symmetric); typically normalized to sum=1
+    p:    Minkowski order (>=1)
+    """
+    a = np.asarray(a, dtype=float).ravel()
+    b = np.asarray(b, dtype=float).ravel()
+    if a.size != b.size:
+        raise ValueError(f"Histogram length mismatch: {a.size} vs {b.size}")
+    if W.shape != (a.size, b.size):
+        raise ValueError(f"Kernel shape {W.shape} does not match hist length {a.size}")
+    # Pairwise |a_i - b_j|^p, weighted by W
+    diff_p = np.abs(a[:, None] - b[None, :]) ** p
+    s = float(np.sum(W * diff_p))
+    return s ** (1.0 / p)
 
 # -----------------------------
 # Weight and Distance Aggregation
 # -----------------------------
-HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd'}
+HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd', 'cross-bin'}
 
 def normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[str, float]:
     """Normalizes a weight dictionary to sum to 1."""
@@ -148,8 +172,13 @@ def compute_weighted_distance(a: np.ndarray, b: np.ndarray, metric: str, weights
     sub_weights = normalize_weights(weights, groups)
 
     dist_fn_map: Dict[str, Callable] = {
-        'euclidean': l2, 'manhattan': l1, 'cosine': cosine_dist,
-        'chi-squared': chi_squared_hist, 'kullback-leibler': kl_sym_hist, 'emd': emd_1d_hist
+        'euclidean': l2,
+        'manhattan': l1,
+        'cosine': cosine_dist,
+        'chi-squared': chi_squared_hist,
+        'kullback-leibler': kl_sym_hist,
+        'emd': emd_1d_hist,
+        'cross-bin': cross_bin_hist,
     }
     dist_fn = dist_fn_map.get(metric)
     if not dist_fn:
@@ -169,8 +198,13 @@ class ShapeSearchEngine:
         self.obj_root_dir = obj_root_dir
         self.labels: List[str] = []
         self.metric_map = {
-            'euclidean': 'euclidean', 'manhattan': 'manhattan', 'cosine': 'cosine',
-            'emd': 'emd', 'chi-squared': 'chi-squared', 'kullback-leibler': 'kullback-leibler'
+            'euclidean': 'euclidean',
+            'manhattan': 'manhattan',
+            'cosine': 'cosine',
+            'emd': 'emd',
+            'chi-squared': 'chi-squared',
+            'kullback-leibler': 'kullback-leibler',
+            'cross-bin': 'cross-bin',
         }
         self.group_weights = group_weights
 
@@ -251,7 +285,7 @@ class ShapeSearchWindow(QWidget):
         self.btn_search = QPushButton("Search")
         layout.addWidget(self.btn_search)
 
-        # Self-distance test button (fixed wiring)
+        # Self-distance test button
         self.btn_self_distance = QPushButton("Test Self-Distance")
         layout.addWidget(self.btn_self_distance)
         self.btn_self_distance.clicked.connect(self._on_test_self_distance)
