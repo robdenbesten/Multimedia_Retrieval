@@ -504,9 +504,6 @@ class CBSRApp(QWidget):
             self.gallery_layout.addLayout(item_layout)
             
         panel.addLayout(self.gallery_layout)
-        self.refresh_gallery_button = QPushButton("Find Similar Objects")
-        self.refresh_gallery_button.clicked.connect(self._refresh_gallery_smart)
-        panel.addWidget(self.refresh_gallery_button)
         return panel
 
     def on_category_changed(self, category_name: str) -> None:
@@ -1003,17 +1000,6 @@ class CBSRApp(QWidget):
                 w.setFixedHeight(max(0, w.width()))
             except Exception:
                 pass
-    
-    def _refresh_gallery_smart(self):
-        """Smart gallery refresh: show similar objects if object selected, otherwise clear gallery."""
-        if hasattr(self, 'loaded_shapes') and self.loaded_shapes:
-            # Get the current object filename
-            current_shape = self.loaded_shapes[-1]
-            filename = os.path.basename(current_shape.file_path)
-            self._load_similar_objects_to_gallery(filename)
-        else:
-            # No object selected, clear gallery
-            self._clear_gallery()
     
     def _clear_gallery(self):
         """Clear all gallery viewers."""
