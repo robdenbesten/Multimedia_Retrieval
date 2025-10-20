@@ -1,5 +1,5 @@
 """
-Compact 3D Shape Browser and Processing GUI v3
+GUI
 """
 import sys
 import os
