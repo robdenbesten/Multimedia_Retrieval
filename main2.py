@@ -6,7 +6,7 @@ import os
 import math
 import threading
 import shutil
-
+import random
 import json
 import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
@@ -435,22 +435,36 @@ class CBSRApp(QWidget):
         
         panel.addLayout(features_layout)
 
+        # Create a 2x2 grid layout for the toggle buttons
+        toggles_layout = QHBoxLayout()
+        
+        # First column of toggles
+        left_column = QVBoxLayout()
         self.bbox_toggle = QCheckBox("Show Bounding Box")
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
-        panel.addWidget(self.bbox_toggle)
+        left_column.addWidget(self.bbox_toggle)
 
         self.reference_toggle = QCheckBox("Show Reference Axes")
         self.reference_toggle.stateChanged.connect(self.on_reference_toggle)
         self.reference_toggle.setChecked(self.show_reference_preference)
-        panel.addWidget(self.reference_toggle)
-
+        left_column.addWidget(self.reference_toggle)
+        
+        # Second column of toggles
+        right_column = QVBoxLayout()
         self.darkmode_toggle = QCheckBox("Dark Mode")
         self.darkmode_toggle.stateChanged.connect(self.on_darkmode_toggle)
-        panel.addWidget(self.darkmode_toggle)
+        right_column.addWidget(self.darkmode_toggle)
 
         self.auto_normalize_toggle = QCheckBox("Normalize")
         self.auto_normalize_toggle.stateChanged.connect(self.on_auto_normalize_toggle)
-        panel.addWidget(self.auto_normalize_toggle)
+        right_column.addWidget(self.auto_normalize_toggle)
+        
+        # Add both columns to the horizontal layout
+        toggles_layout.addLayout(left_column)
+        toggles_layout.addLayout(right_column)
+        
+        # Add the toggle layout to the main panel
+        panel.addLayout(toggles_layout)
         return panel
 
     def _create_gallery_panel(self) -> QVBoxLayout:
@@ -462,7 +476,6 @@ class CBSRApp(QWidget):
         self.gallery_plotters: List[Plotter] = []
         self.gallery_metrics_labels: List[QLabel] = []
         self.gallery_histogram_widgets: List[HistogramWidget] = []
-        self.gallery_distance_labels: List[QLabel] = []
         
         for i in range(5):
             # Create vertical layout for each gallery item (viewer + features)
@@ -480,7 +493,7 @@ class CBSRApp(QWidget):
             
             # Metrics label for this gallery item
             metrics_label = QLabel("Metrics will appear here")
-            metrics_label.setStyleSheet("font-family: monospace; font-size: 7px; color: #555; max-height: 80px;")
+            metrics_label.setStyleSheet("font-family: monospace; font-size: 9px; color: #555; max-height: 120px;")
             metrics_label.setWordWrap(True)
             metrics_label.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.gallery_metrics_labels.append(metrics_label)
@@ -492,13 +505,6 @@ class CBSRApp(QWidget):
             features_layout.addWidget(histogram_widget)
             
             item_layout.addLayout(features_layout)
-            
-            # Distance score label for this gallery item
-            distance_label = QLabel("Similarity: --")
-            distance_label.setStyleSheet("font-family: monospace; font-size: 8px; color: #007acc; font-weight: bold;")
-            distance_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.gallery_distance_labels.append(distance_label)
-            item_layout.addWidget(distance_label)
             
             # Add the complete item layout to gallery
             self.gallery_layout.addLayout(item_layout)
@@ -742,77 +748,96 @@ class CBSRApp(QWidget):
 
     def on_auto_normalize_toggle(self, state) -> None:
         """Handle auto-normalize checkbox state change and immediately update viewer."""
-        # If no shape is currently loaded, just update the status message
-        if not self.loaded_shapes:
+        try:
+            # If no shape is currently loaded, just update the status message
+            if not self.loaded_shapes:
+                if state:
+                    self.info_label.setText("Normalize enabled. Select a file to see normalized version.")
+                else:
+                    self.info_label.setText("Normalize disabled. Objects will be shown as original.")
+                return
+            
+            # Get the current shape
+            current_shape = self.loaded_shapes[-1]
+            
             if state:
-                self.info_label.setText("Normalize enabled. Select a file to see normalized version.")
+                # Checkbox checked - show normalized version
+                self.info_label.setText("Normalizing current object, please wait...")
+                QApplication.processEvents()
+                
+                # Create a fresh copy of the shape for normalization
+                temp_shape = Shape(current_shape.file_path)
+                temp_shape.load()
+                
+                # Normalize the temp shape
+                if not temp_shape.resample():
+                    self.info_label.setText("Normalize failed: Remeshing step failed.")
+                    # Reset checkbox to unchecked state
+                    self.auto_normalize_toggle.setChecked(False)
+                    return
+                
+                if not temp_shape.normalize():
+                    self.info_label.setText("Normalize failed: Normalization step failed.")
+                    # Reset checkbox to unchecked state
+                    self.auto_normalize_toggle.setChecked(False)
+                    return
+                
+                # Update the loaded shape with normalized version
+                self.loaded_shapes[-1] = temp_shape
+                current_shape = temp_shape
+                status_prefix = "(Normalized) "
             else:
-                self.info_label.setText("Normalize disabled. Objects will be shown as original.")
-            return
-        
-        # Get the current shape
-        current_shape = self.loaded_shapes[-1]
-        
-        if state:
-            # Checkbox checked - show normalized version
-            self.info_label.setText("Normalizing current object, please wait...")
-            QApplication.processEvents()
+                # Checkbox unchecked - reload original version
+                self.info_label.setText("Loading original object...")
+                QApplication.processEvents()
+                
+                # Reload the original shape
+                original_shape = Shape(current_shape.file_path)
+                original_shape.load()
+                
+                # Update the loaded shape with original version
+                self.loaded_shapes[-1] = original_shape
+                current_shape = original_shape
+                status_prefix = ""
             
-            # Create a fresh copy of the shape for normalization
-            temp_shape = Shape(current_shape.file_path)
-            temp_shape.load()
+            # Clear and redisplay the mesh
+            self.plotter.clear()
             
-            # Normalize the temp shape
-            if not temp_shape.resample():
-                self.info_label.setText("Normalize failed: Remeshing step failed.")
-                return
+            # Re-add origin axes after clearing (only if reference toggle is on)
+            if self.show_reference_preference:
+                for axis in self.origin_axes:
+                    self.plotter.add(axis)
             
-            if not temp_shape.normalize():
-                self.info_label.setText("Normalize failed: Normalization step failed.")
-                return
+            # Display mesh with lighting enabled
+            current_shape.mesh.lighting('default').linecolor('black').linewidth(1)
+            self.plotter.show(current_shape.mesh, resetcam=True)
+            self.current_mesh_actor = current_shape.mesh
             
-            # Update the loaded shape with normalized version
-            self.loaded_shapes[-1] = temp_shape
-            current_shape = temp_shape
-            status_prefix = "(Normalized) "
-        else:
-            # Checkbox unchecked - reload original version
-            self.info_label.setText("Loading original object...")
-            QApplication.processEvents()
+            # Update info label
+            filename = os.path.basename(current_shape.file_path)
+            self.info_label.setText(f"{status_prefix}File: {filename}\nVertices: {current_shape.vertices}")
             
-            # Reload the original shape
-            original_shape = Shape(current_shape.file_path)
-            original_shape.load()
+            # Update features display for the current shape
+            self._update_main_viewer_features(filename)
             
-            # Update the loaded shape with original version
-            self.loaded_shapes[-1] = original_shape
-            current_shape = original_shape
-            status_prefix = ""
-        
-        # Clear and redisplay the mesh
-        self.plotter.clear()
-        
-        # Re-add origin axes after clearing (only if reference toggle is on)
-        if self.show_reference_preference:
-            for axis in self.origin_axes:
-                self.plotter.add(axis)
-        
-        # Display mesh with lighting enabled
-        current_shape.mesh.lighting('default').linecolor('black').linewidth(1)
-        self.plotter.show(current_shape.mesh, resetcam=True)
-        self.current_mesh_actor = current_shape.mesh
-        
-        # Update info label
-        filename = os.path.basename(current_shape.file_path)
-        self.info_label.setText(f"{status_prefix}File: {filename}\nVertices: {current_shape.vertices}")
-        
-        # Re-apply bounding box if it was previously shown
-        if self.show_bbox_preference:
-            self.on_bbox_toggle(True)
-
-
-
-
+            # Update gallery with similar objects based on current state
+            self._load_similar_objects_to_gallery(filename)
+            
+            # Re-apply bounding box if it was previously shown
+            if self.show_bbox_preference:
+                self.on_bbox_toggle(True)
+            
+            # Force a render to ensure display is updated
+            try:
+                self.plotter.render()
+            except Exception as e:
+                print(f"Error rendering after normalize toggle: {e}")
+                
+        except Exception as e:
+            print(f"Error in normalize toggle: {e}")
+            self.info_label.setText(f"Error during normalize toggle: {str(e)}")
+            # Reset checkbox to a safe state
+            self.auto_normalize_toggle.setChecked(False)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -844,11 +869,19 @@ class CBSRApp(QWidget):
         self.metrics_label.setText(self._format_metrics_text(metrics))
         self.histogram_widget.set_histograms(histograms)
 
-    def _update_gallery_item_features(self, item_index, filename):
+    def _update_gallery_item_features(self, item_index, filename, distance=None):
         """Update features for a specific gallery item."""
         if item_index < len(self.gallery_metrics_labels):
             metrics, histograms = self._get_features_for_file(filename)
-            self.gallery_metrics_labels[item_index].setText(self._format_metrics_text(metrics))
+            
+            # Add similarity score if distance is provided
+            if distance is not None:
+                similarity_score = self._compute_similarity_score(distance)
+                metrics_text = f"Score: {similarity_score:.1f}%\n{self._format_metrics_text(metrics)}"
+            else:
+                metrics_text = self._format_metrics_text(metrics)
+            
+            self.gallery_metrics_labels[item_index].setText(metrics_text)
             self.gallery_histogram_widgets[item_index].set_histograms(histograms)
     
     def _extract_feature_vector(self, filename):
@@ -866,33 +899,15 @@ class CBSRApp(QWidget):
                 hist_array = hist_array / hist_sum  # Normalize histogram
             hist_vector.extend(hist_array)
         
-        # Add scalar metrics (8 metrics) - normalize these too
+        # Add scalar metrics (8 metrics)
         scalar_vector = []
-        metric_values = list(metrics.values())[:8]
-        for value in metric_values:
+        for value in list(metrics.values())[:8]:
             if isinstance(value, (int, float)) and not (math.isnan(value) or math.isinf(value)):
                 scalar_vector.append(float(value))
             else:
                 scalar_vector.append(0.0)
         
-        # Normalize scalar metrics using z-score normalization
-        if len(scalar_vector) > 0:
-            scalar_array = np.array(scalar_vector)
-            # Use robust normalization to handle outliers
-            scalar_std = np.std(scalar_array) if np.std(scalar_array) > 1e-8 else 1.0
-            scalar_mean = np.mean(scalar_array)
-            scalar_array = (scalar_array - scalar_mean) / scalar_std
-            scalar_vector = scalar_array.tolist()
-        
-        # Combine and normalize the entire feature vector
-        full_vector = np.array(hist_vector + scalar_vector)
-        
-        # L2 normalization to make all vectors unit length
-        vector_norm = np.linalg.norm(full_vector)
-        if vector_norm > 1e-8:
-            full_vector = full_vector / vector_norm
-        
-        return full_vector
+        return np.array(hist_vector + scalar_vector)
     
     def _compute_distance(self, vec1, vec2):
         """Compute Euclidean distance between two feature vectors."""
@@ -900,17 +915,14 @@ class CBSRApp(QWidget):
             return float('inf')
         return np.linalg.norm(vec1 - vec2)
     
-    def _distance_to_similarity_score(self, distance):
-        """Convert distance to a 0-100% similarity score."""
-        # For unit-normalized vectors, Euclidean distance is in range [0, 2]
-        # Distance 0 = identical, Distance 2 = completely opposite
-        max_distance = 2.0  # Maximum possible distance for unit vectors
-        
-        # Convert to similarity percentage (exponential decay for better discrimination)
-        # This gives better separation between similar and dissimilar objects
-        similarity = 100 * np.exp(-2.0 * distance)  # Exponential decay
-        
-        return max(0, min(100, similarity))
+    def _compute_similarity_score(self, distance, max_distance=10.0):
+        """Convert distance to similarity score (0-100, where 100 is most similar)."""
+        if distance == float('inf'):
+            return 0.0
+        # Clamp distance to max_distance and convert to percentage
+        clamped_distance = min(distance, max_distance)
+        similarity = max(0.0, (max_distance - clamped_distance) / max_distance * 100)
+        return similarity
     
     def _find_similar_objects(self, query_filename, top_n=5):
         """Find the most similar objects to the query."""
@@ -937,13 +949,6 @@ class CBSRApp(QWidget):
         
         # Sort by distance and return top N
         distances.sort(key=lambda x: x[0])
-        
-        # Debug: Print distance range for analysis
-        if distances:
-            min_dist = distances[0][0]
-            max_dist = distances[-1][0] if len(distances) > 1 else min_dist
-            print(f"Distance range for {query_filename}: {min_dist:.3f} to {max_dist:.3f}")
-        
         return distances[:top_n]
     
     def _load_similar_objects_to_gallery(self, query_filename):
@@ -969,12 +974,7 @@ class CBSRApp(QWidget):
                     mesh = load(obj_path)
                     mesh.lighting('default').linecolor('black').linewidth(1)
                     self.gallery_plotters[i].show(mesh, resetcam=True)
-                    self._update_gallery_item_features(i, filename)
-                    
-                    # Update distance score display
-                    if i < len(self.gallery_distance_labels):
-                        similarity_score = self._distance_to_similarity_score(distance)
-                        self.gallery_distance_labels[i].setText(f"Similarity: {similarity_score:.1f}% (d={distance:.3f})")
+                    self._update_gallery_item_features(i, filename, distance)
                 else:
                     # Object file not found, clear the gallery slot
                     self.gallery_plotters[i].clear()
@@ -982,8 +982,6 @@ class CBSRApp(QWidget):
                     if i < len(self.gallery_metrics_labels):
                         self.gallery_metrics_labels[i].setText("File not found")
                         self.gallery_histogram_widgets[i].set_histograms([])
-                        if i < len(self.gallery_distance_labels):
-                            self.gallery_distance_labels[i].setText("Similarity: --")
             except Exception as e:
                 print(f"Error loading similar object {i}: {e}")
                 self.gallery_plotters[i].clear()
@@ -991,8 +989,6 @@ class CBSRApp(QWidget):
                 if i < len(self.gallery_metrics_labels):
                     self.gallery_metrics_labels[i].setText("Load error")
                     self.gallery_histogram_widgets[i].set_histograms([])
-                    if i < len(self.gallery_distance_labels):
-                        self.gallery_distance_labels[i].setText("Similarity: --")
         
         # Keep gallery viewers square
         for w in self.gallery_widgets:
@@ -1009,8 +1005,6 @@ class CBSRApp(QWidget):
         for i in range(len(self.gallery_metrics_labels)):
             self.gallery_metrics_labels[i].setText("Select an object to see similar items")
             self.gallery_histogram_widgets[i].set_histograms([])
-            if i < len(self.gallery_distance_labels):
-                self.gallery_distance_labels[i].setText("Similarity: --")
 
     def closeEvent(self, event) -> None:
         """Handle application close with proper cleanup."""
