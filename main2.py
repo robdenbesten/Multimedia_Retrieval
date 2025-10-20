@@ -22,6 +22,7 @@ import pymeshlab as ml
 TARGET_VERTICES = 5000
 SHAPEDATA_PARENT = os.path.abspath('ShapeDatabase_INFOMR-master/Original Database')
 TEMP_REMESH_DIR = os.path.abspath('temp_remesh')
+FEATURES_JSON_FILE = 'features_dictionary.json'
 
 
 def parse_obj_info(filepath: str) -> Tuple[int, int, str, str]:
@@ -343,7 +344,7 @@ class CBSRApp(QWidget):
         
         # Load features dictionary
         try:
-            with open('features_dictionary.json', 'r') as f:
+            with open(FEATURES_JSON_FILE, 'r') as f:
                 self.features_dict = json.load(f)
             print(f"Loaded features for {len(self.features_dict)} categories")
         except Exception as e:
@@ -435,36 +436,22 @@ class CBSRApp(QWidget):
         
         panel.addLayout(features_layout)
 
-        # Create a 2x2 grid layout for the toggle buttons
-        toggles_layout = QHBoxLayout()
-        
-        # First column of toggles
-        left_column = QVBoxLayout()
         self.bbox_toggle = QCheckBox("Show Bounding Box")
         self.bbox_toggle.stateChanged.connect(self.on_bbox_toggle)
-        left_column.addWidget(self.bbox_toggle)
+        panel.addWidget(self.bbox_toggle)
 
         self.reference_toggle = QCheckBox("Show Reference Axes")
         self.reference_toggle.stateChanged.connect(self.on_reference_toggle)
         self.reference_toggle.setChecked(self.show_reference_preference)
-        left_column.addWidget(self.reference_toggle)
-        
-        # Second column of toggles
-        right_column = QVBoxLayout()
+        panel.addWidget(self.reference_toggle)
+
         self.darkmode_toggle = QCheckBox("Dark Mode")
         self.darkmode_toggle.stateChanged.connect(self.on_darkmode_toggle)
-        right_column.addWidget(self.darkmode_toggle)
+        panel.addWidget(self.darkmode_toggle)
 
         self.auto_normalize_toggle = QCheckBox("Normalize")
         self.auto_normalize_toggle.stateChanged.connect(self.on_auto_normalize_toggle)
-        right_column.addWidget(self.auto_normalize_toggle)
-        
-        # Add both columns to the horizontal layout
-        toggles_layout.addLayout(left_column)
-        toggles_layout.addLayout(right_column)
-        
-        # Add the toggle layout to the main panel
-        panel.addLayout(toggles_layout)
+        panel.addWidget(self.auto_normalize_toggle)
         return panel
 
     def _create_gallery_panel(self) -> QVBoxLayout:
