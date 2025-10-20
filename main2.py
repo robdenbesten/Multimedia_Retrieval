@@ -6,7 +6,7 @@ import os
 import math
 import threading
 import shutil
-import random
+
 import json
 import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
@@ -456,12 +456,13 @@ class CBSRApp(QWidget):
     def _create_gallery_panel(self) -> QVBoxLayout:
         """Create bottom gallery panel that spans the full window width."""
         panel = QVBoxLayout()
-        panel.addWidget(QLabel("Gallery (5 random from current category)"))
+        panel.addWidget(QLabel("Gallery (5 most similar objects)"))
         self.gallery_layout = QHBoxLayout()
         self.gallery_widgets: List[QVTKRenderWindowInteractor] = []
         self.gallery_plotters: List[Plotter] = []
         self.gallery_metrics_labels: List[QLabel] = []
         self.gallery_histogram_widgets: List[HistogramWidget] = []
+        self.gallery_distance_labels: List[QLabel] = []
         
         for i in range(5):
             # Create vertical layout for each gallery item (viewer + features)
@@ -492,12 +493,19 @@ class CBSRApp(QWidget):
             
             item_layout.addLayout(features_layout)
             
+            # Distance score label for this gallery item
+            distance_label = QLabel("Similarity: --")
+            distance_label.setStyleSheet("font-family: monospace; font-size: 8px; color: #007acc; font-weight: bold;")
+            distance_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.gallery_distance_labels.append(distance_label)
+            item_layout.addWidget(distance_label)
+            
             # Add the complete item layout to gallery
             self.gallery_layout.addLayout(item_layout)
             
         panel.addLayout(self.gallery_layout)
-        self.refresh_gallery_button = QPushButton("Refresh Gallery")
-        self.refresh_gallery_button.clicked.connect(self.load_random_gallery)
+        self.refresh_gallery_button = QPushButton("Find Similar Objects")
+        self.refresh_gallery_button.clicked.connect(self._refresh_gallery_smart)
         panel.addWidget(self.refresh_gallery_button)
         return panel
 
@@ -508,8 +516,8 @@ class CBSRApp(QWidget):
         category_path = os.path.join(self.parent_folder, category_name)
         files = [f for f in os.listdir(category_path) if f.endswith('.obj')]
         self.file_list.addItems(files)
-        # Update gallery when category changes
-        self.load_random_gallery()
+        # Clear gallery when category changes
+        self._clear_gallery()
 
     def on_file_selected(self, item) -> None:
         """Handle file selection and display mesh."""
@@ -550,6 +558,9 @@ class CBSRApp(QWidget):
         
         # Update features display for main viewer
         self._update_main_viewer_features(item.text())
+        
+        # Load similar objects to gallery
+        self._load_similar_objects_to_gallery(item.text())
         
         self.bbox_toggle.setChecked(self.show_bbox_preference)
         self.reference_toggle.setChecked(self.show_reference_preference)
@@ -802,46 +813,9 @@ class CBSRApp(QWidget):
         if self.show_bbox_preference:
             self.on_bbox_toggle(True)
 
-    def _list_obj_files_in_current_category(self) -> List[str]:
-        """List absolute paths to .obj files in the current category."""
-        if not hasattr(self, 'current_category'):
-            return []
-        category_path = os.path.join(self.parent_folder, self.current_category)
-        return [os.path.join(category_path, f) for f in os.listdir(category_path) if f.lower().endswith('.obj')]
 
-    def load_random_gallery(self) -> None:
-        """Load 5 random objects into the gallery viewers from current category."""
-        obj_files = self._list_obj_files_in_current_category()
-        if not obj_files:
-            for p in self.gallery_plotters:
-                p.clear()
-                p.render()
-            for i in range(len(self.gallery_metrics_labels)):
-                self.gallery_metrics_labels[i].setText("No data")
-                self.gallery_histogram_widgets[i].set_histograms([])
-            return
 
-        choices = random.choices(obj_files, k=5)
-        for i, (plotter, path) in enumerate(zip(self.gallery_plotters, choices)):
-            try:
-                plotter.clear()
-                mesh = load(path)
-                mesh.lighting('default').linecolor('black').linewidth(1)
-                plotter.show(mesh, resetcam=True)
-                self._update_gallery_item_features(i, os.path.basename(path))
-            except Exception:
-                plotter.clear()
-                plotter.render()
-                if i < len(self.gallery_metrics_labels):
-                    self.gallery_metrics_labels[i].setText("Load error")
-                    self.gallery_histogram_widgets[i].set_histograms([])
-                    
-        # Keep gallery viewers square
-        for w in self.gallery_widgets:
-            try:
-                w.setFixedHeight(max(0, w.width()))
-            except Exception:
-                pass
+
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -879,6 +853,178 @@ class CBSRApp(QWidget):
             metrics, histograms = self._get_features_for_file(filename)
             self.gallery_metrics_labels[item_index].setText(self._format_metrics_text(metrics))
             self.gallery_histogram_widgets[item_index].set_histograms(histograms)
+    
+    def _extract_feature_vector(self, filename):
+        """Extract normalized feature vector for comparison."""
+        metrics, histograms = self._get_features_for_file(filename)
+        if not metrics or not histograms:
+            return None
+        
+        # Combine histogram data (5 histograms with 20 bins each = 100 values)
+        hist_vector = []
+        for hist in histograms[:5]:  # Use first 5 histograms
+            hist_array = np.array(hist[:20])  # Use first 20 bins
+            hist_sum = np.sum(hist_array)
+            if hist_sum > 0:
+                hist_array = hist_array / hist_sum  # Normalize histogram
+            hist_vector.extend(hist_array)
+        
+        # Add scalar metrics (8 metrics) - normalize these too
+        scalar_vector = []
+        metric_values = list(metrics.values())[:8]
+        for value in metric_values:
+            if isinstance(value, (int, float)) and not (math.isnan(value) or math.isinf(value)):
+                scalar_vector.append(float(value))
+            else:
+                scalar_vector.append(0.0)
+        
+        # Normalize scalar metrics using z-score normalization
+        if len(scalar_vector) > 0:
+            scalar_array = np.array(scalar_vector)
+            # Use robust normalization to handle outliers
+            scalar_std = np.std(scalar_array) if np.std(scalar_array) > 1e-8 else 1.0
+            scalar_mean = np.mean(scalar_array)
+            scalar_array = (scalar_array - scalar_mean) / scalar_std
+            scalar_vector = scalar_array.tolist()
+        
+        # Combine and normalize the entire feature vector
+        full_vector = np.array(hist_vector + scalar_vector)
+        
+        # L2 normalization to make all vectors unit length
+        vector_norm = np.linalg.norm(full_vector)
+        if vector_norm > 1e-8:
+            full_vector = full_vector / vector_norm
+        
+        return full_vector
+    
+    def _compute_distance(self, vec1, vec2):
+        """Compute Euclidean distance between two feature vectors."""
+        if vec1 is None or vec2 is None:
+            return float('inf')
+        return np.linalg.norm(vec1 - vec2)
+    
+    def _distance_to_similarity_score(self, distance):
+        """Convert distance to a 0-100% similarity score."""
+        # For unit-normalized vectors, Euclidean distance is in range [0, 2]
+        # Distance 0 = identical, Distance 2 = completely opposite
+        max_distance = 2.0  # Maximum possible distance for unit vectors
+        
+        # Convert to similarity percentage (exponential decay for better discrimination)
+        # This gives better separation between similar and dissimilar objects
+        similarity = 100 * np.exp(-2.0 * distance)  # Exponential decay
+        
+        return max(0, min(100, similarity))
+    
+    def _find_similar_objects(self, query_filename, top_n=5):
+        """Find the most similar objects to the query."""
+        query_vector = self._extract_feature_vector(query_filename)
+        if query_vector is None:
+            return []
+        
+        distances = []
+        query_base = os.path.splitext(query_filename)[0]
+        
+        # Compare with all objects in the features dictionary
+        for category, files in self.features_dict.items():
+            for file_key, file_data in files.items():
+                if file_key == query_base:
+                    continue  # Skip the query object itself
+                
+                # Reconstruct filename and extract vector
+                candidate_filename = file_key + '.obj'
+                candidate_vector = self._extract_feature_vector(candidate_filename)
+                
+                if candidate_vector is not None:
+                    distance = self._compute_distance(query_vector, candidate_vector)
+                    distances.append((distance, category, candidate_filename))
+        
+        # Sort by distance and return top N
+        distances.sort(key=lambda x: x[0])
+        
+        # Debug: Print distance range for analysis
+        if distances:
+            min_dist = distances[0][0]
+            max_dist = distances[-1][0] if len(distances) > 1 else min_dist
+            print(f"Distance range for {query_filename}: {min_dist:.3f} to {max_dist:.3f}")
+        
+        return distances[:top_n]
+    
+    def _load_similar_objects_to_gallery(self, query_filename):
+        """Load the 5 most similar objects to the gallery in order: closest on left, 2nd closest, etc."""
+        similar_objects = self._find_similar_objects(query_filename, 5)
+        
+        if not similar_objects:
+            # No similar objects found, clear gallery
+            self._clear_gallery()
+            return
+        
+        # Load similar objects into gallery in order
+        for i, (distance, category, filename) in enumerate(similar_objects):
+            if i >= len(self.gallery_plotters):
+                break
+            
+            try:
+                # Construct full path
+                obj_path = os.path.join(self.parent_folder, category, filename)
+                
+                if os.path.exists(obj_path):
+                    self.gallery_plotters[i].clear()
+                    mesh = load(obj_path)
+                    mesh.lighting('default').linecolor('black').linewidth(1)
+                    self.gallery_plotters[i].show(mesh, resetcam=True)
+                    self._update_gallery_item_features(i, filename)
+                    
+                    # Update distance score display
+                    if i < len(self.gallery_distance_labels):
+                        similarity_score = self._distance_to_similarity_score(distance)
+                        self.gallery_distance_labels[i].setText(f"Similarity: {similarity_score:.1f}% (d={distance:.3f})")
+                else:
+                    # Object file not found, clear the gallery slot
+                    self.gallery_plotters[i].clear()
+                    self.gallery_plotters[i].render()
+                    if i < len(self.gallery_metrics_labels):
+                        self.gallery_metrics_labels[i].setText("File not found")
+                        self.gallery_histogram_widgets[i].set_histograms([])
+                        if i < len(self.gallery_distance_labels):
+                            self.gallery_distance_labels[i].setText("Similarity: --")
+            except Exception as e:
+                print(f"Error loading similar object {i}: {e}")
+                self.gallery_plotters[i].clear()
+                self.gallery_plotters[i].render()
+                if i < len(self.gallery_metrics_labels):
+                    self.gallery_metrics_labels[i].setText("Load error")
+                    self.gallery_histogram_widgets[i].set_histograms([])
+                    if i < len(self.gallery_distance_labels):
+                        self.gallery_distance_labels[i].setText("Similarity: --")
+        
+        # Keep gallery viewers square
+        for w in self.gallery_widgets:
+            try:
+                w.setFixedHeight(max(0, w.width()))
+            except Exception:
+                pass
+    
+    def _refresh_gallery_smart(self):
+        """Smart gallery refresh: show similar objects if object selected, otherwise clear gallery."""
+        if hasattr(self, 'loaded_shapes') and self.loaded_shapes:
+            # Get the current object filename
+            current_shape = self.loaded_shapes[-1]
+            filename = os.path.basename(current_shape.file_path)
+            self._load_similar_objects_to_gallery(filename)
+        else:
+            # No object selected, clear gallery
+            self._clear_gallery()
+    
+    def _clear_gallery(self):
+        """Clear all gallery viewers."""
+        for p in self.gallery_plotters:
+            p.clear()
+            p.render()
+        for i in range(len(self.gallery_metrics_labels)):
+            self.gallery_metrics_labels[i].setText("Select an object to see similar items")
+            self.gallery_histogram_widgets[i].set_histograms([])
+            if i < len(self.gallery_distance_labels):
+                self.gallery_distance_labels[i].setText("Similarity: --")
 
     def closeEvent(self, event) -> None:
         """Handle application close with proper cleanup."""
