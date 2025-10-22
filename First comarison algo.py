@@ -1,4 +1,3 @@
-# python
 import os
 import json
 import sys
@@ -18,10 +17,11 @@ HIST_BINS = 20
 SCALAR_KEYS = ['Surface area', 'Sphericity', 'Rectangularity', 'Diameter', 'Convexity', 'Eccentricity']
 FEATURE_GROUP_ORDER = HIST_KEYS + SCALAR_KEYS
 HIST_TOTAL_BINS = len(HIST_KEYS) * HIST_BINS
-CROSS_BIN_SIGMA = 1.5   # neighborhood width in bins (tune as needed)
-CROSS_BIN_P = 1.0       # p in the formula; try 1.0 or 2.0
+CROSS_BIN_SIGMA = 1.5  # neighborhood width in bins (tune as needed)
+CROSS_BIN_P = 1.0  # p in the formula; try 1.0 or 2.0
 
 EPS = 1e-10
+
 
 def compute_group_slices() -> Dict[str, slice]:
     """Computes the slice for each feature group in the concatenated vector."""
@@ -35,7 +35,9 @@ def compute_group_slices() -> Dict[str, slice]:
         idx += 1
     return slices
 
+
 GROUP_SLICES = compute_group_slices()
+
 
 # -----------------------------
 # Feature Parsing and Normalization
@@ -57,6 +59,7 @@ def parse_feature_from_entry(entry: Dict) -> np.ndarray:
     feature_vector = np.array(all_hist_values + scalar_values, dtype=float)
     feature_vector = np.nan_to_num(feature_vector, nan=0.0, posinf=0.0, neginf=0.0)
     return feature_vector
+
 
 def normalize_features(features: np.ndarray) -> np.ndarray:
     """
@@ -86,9 +89,11 @@ def normalize_features(features: np.ndarray) -> np.ndarray:
 
     return norm_features
 
+
 def get_obj_path(label: str, obj_root_dir: str) -> str:
     """Constructs the full .obj path from a label and root directory."""
     return os.path.join(obj_root_dir, label)
+
 
 # -----------------------------
 # Base Distance Functions
@@ -97,24 +102,30 @@ def l2(a: np.ndarray, b: np.ndarray) -> float:
     d = a - b
     return float(np.sqrt(np.dot(d, d)))
 
+
 def l1(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sum(np.abs(a - b)))
+
 
 def cosine_dist(a: np.ndarray, b: np.ndarray) -> float:
     na = np.linalg.norm(a)
     nb = np.linalg.norm(b)
     return 1.0 if na == 0.0 or nb == 0.0 else float(1.0 - (np.dot(a, b) / (na * nb)))
 
+
 def chi_squared_hist(a: np.ndarray, b: np.ndarray) -> float:
     return float(0.5 * np.sum((a - b) ** 2 / (a + b + EPS)))
+
 
 def kl_sym_hist(a: np.ndarray, b: np.ndarray) -> float:
     kl_ab = np.sum(a * np.log((a + EPS) / (b + EPS)))
     kl_ba = np.sum(b * np.log((b + EPS) / (a + EPS)))
     return float(kl_ab + kl_ba)
 
+
 def emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sum(np.abs(np.cumsum(a) - np.cumsum(b))))
+
 
 def make_cross_bin_kernel(n: int, sigma: float = 1.5, normalize: bool = True) -> np.ndarray:
     """
@@ -130,8 +141,10 @@ def make_cross_bin_kernel(n: int, sigma: float = 1.5, normalize: bool = True) ->
             W /= s
     return W
 
+
 # Global kernel for all histogram groups (all histograms have HIST_BINS bins)
 CROSS_BIN_W = make_cross_bin_kernel(HIST_BINS, sigma=CROSS_BIN_SIGMA, normalize=True)
+
 
 def cross_bin_hist(a: np.ndarray, b: np.ndarray, W: np.ndarray = CROSS_BIN_W, p: float = CROSS_BIN_P) -> float:
     """
@@ -152,10 +165,12 @@ def cross_bin_hist(a: np.ndarray, b: np.ndarray, W: np.ndarray = CROSS_BIN_W, p:
     s = float(np.sum(W * diff_p))
     return s ** (1.0 / p)
 
+
 # -----------------------------
 # Weight and Distance Aggregation
 # -----------------------------
 HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd', 'cross-bin'}
+
 
 def normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[str, float]:
     """Normalizes a weight dictionary to sum to 1."""
@@ -165,6 +180,7 @@ def normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[str
         equal = 1.0 / len(allowed)
         return {k: equal for k in allowed}
     return {k: v / s for k, v in w.items()}
+
 
 def compute_weighted_distance(a: np.ndarray, b: np.ndarray, metric: str, weights: Dict[str, float]) -> float:
     """Computes the final distance as a weighted sum of per-group distances."""
@@ -190,23 +206,52 @@ def compute_weighted_distance(a: np.ndarray, b: np.ndarray, metric: str, weights
         total_dist += sub_weights[g] * dist_fn(a[sl], b[sl])
     return float(total_dist)
 
+
+def compute_distance_weighted(
+        a: np.ndarray, b: np.ndarray, metric: str, weights: Dict[str, float], dist_stats: Dict[str, Dict[str, tuple]]
+) -> float:
+    """Computes distance by standardizing per-group distances before weighting."""
+    groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
+    sub_weights = normalize_weights(weights, groups)
+    metric_stats = dist_stats.get(metric, {})
+
+    dist_fn_map: Dict[str, Callable] = {
+        'euclidean': l2, 'manhattan': l1, 'cosine': cosine_dist,
+        'chi-squared': chi_squared_hist, 'kullback-leibler': kl_sym_hist,
+        'emd': emd_1d_hist, 'cross-bin': cross_bin_hist,
+    }
+    dist_fn = dist_fn_map.get(metric)
+    if not dist_fn:
+        raise ValueError(f"Unknown metric: {metric}")
+
+    total_dist = 0.0
+    for g in groups:
+        sl = GROUP_SLICES[g]
+        raw_dist = dist_fn(a[sl], b[sl])
+
+        mean, std = metric_stats.get(g, (0.0, 1.0))
+        norm_dist = (raw_dist - mean) / std if std > 0 else 0.0
+
+        total_dist += sub_weights[g] * norm_dist
+    return float(total_dist)
+
+
 # -----------------------------
 # Shape Search Engine
 # -----------------------------
 class ShapeSearchEngine:
-    def __init__(self, feature_json_path: str, obj_root_dir: str, group_weights: Dict[str, float]):
+    def __init__(self, feature_json_path: str, obj_root_dir: str, group_weights: Dict[str, float],
+                 weighting_method: str = 'feature'):
         self.obj_root_dir = obj_root_dir
         self.labels: List[str] = []
         self.metric_map = {
-            'euclidean': 'euclidean',
-            'manhattan': 'manhattan',
-            'cosine': 'cosine',
-            'emd': 'emd',
-            'chi-squared': 'chi-squared',
-            'kullback-leibler': 'kullback-leibler',
-            'cross-bin': 'cross-bin',
+            'euclidean': 'euclidean', 'manhattan': 'manhattan', 'cosine': 'cosine',
+            'emd': 'emd', 'chi-squared': 'chi-squared',
+            'kullback-leibler': 'kullback-leibler', 'cross-bin': 'cross-bin',
         }
         self.group_weights = group_weights
+        self.weighting_method = weighting_method
+        self.dist_stats: Dict[str, Dict[str, tuple]] = {}
 
         with open(feature_json_path, 'r') as f:
             data = json.load(f)
@@ -219,22 +264,68 @@ class ShapeSearchEngine:
         if not raw_feats:
             raise RuntimeError("No features loaded from JSON file.")
 
-        # Normalize features at initialization
-        self.features = normalize_features(np.stack(raw_feats, axis=0))
+        self.raw_features = np.stack(raw_feats, axis=0)
+        self.features = normalize_features(self.raw_features)
+
+        if self.weighting_method == 'distance':
+            print("Pre-computing distance statistics for all feature groups...")
+            self._precompute_distance_stats()
+            print("✅ Distance statistics computed.")
+
+    def _precompute_distance_stats(self):
+        """Calculates mean and std of distances for each group and metric."""
+        num_samples = 1000  # Use a subset to avoid O(N^2) cost
+        num_shapes = self.features.shape[0]
+        rng = np.random.default_rng(42)
+        indices = rng.choice(num_shapes, size=min(num_samples, num_shapes), replace=False)
+        sampled_features = self.features[indices]
+
+        dist_fn_map: Dict[str, Callable] = {
+            'euclidean': l2, 'manhattan': l1, 'cosine': cosine_dist,
+            'chi-squared': chi_squared_hist, 'kullback-leibler': kl_sym_hist,
+            'emd': emd_1d_hist, 'cross-bin': cross_bin_hist,
+        }
+
+        for metric, dist_fn in dist_fn_map.items():
+            self.dist_stats[metric] = {}
+            groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
+            for g in groups:
+                sl = GROUP_SLICES[g]
+                group_vectors = sampled_features[:, sl]
+
+                dists = []
+                for i in range(len(group_vectors)):
+                    for j in range(i + 1, len(group_vectors)):
+                        dists.append(dist_fn(group_vectors[i], group_vectors[j]))
+
+                if dists:
+                    self.dist_stats[metric][g] = (np.mean(dists), np.std(dists))
+                else:
+                    self.dist_stats[metric][g] = (0.0, 1.0)
 
     def search(self, query_label: str, top_n: int = 5, metric: str = 'euclidean') -> List[str]:
         if query_label not in self.labels:
             raise ValueError(f"Query label '{query_label}' not found in dataset.")
 
         query_idx = self.labels.index(query_label)
-        q_vec = self.features[query_idx]
         metric_name = self.metric_map.get(metric)
         if not metric_name:
             raise ValueError(f"Unknown metric: {metric}")
 
+        if self.weighting_method == 'distance':
+            q_vec = self.features[query_idx]
+            compute_fn = compute_distance_weighted
+            features_to_compare = self.features
+            extra_args = {'dist_stats': self.dist_stats}
+        else:  # 'feature' weighting
+            q_vec = self.features[query_idx]
+            compute_fn = compute_weighted_distance
+            features_to_compare = self.features
+            extra_args = {}
+
         dists = np.array([
-            compute_weighted_distance(q_vec, vec, metric_name, self.group_weights)
-            for vec in self.features
+            compute_fn(q_vec, vec, metric_name, self.group_weights, **extra_args)
+            for vec in features_to_compare
         ], dtype=float)
 
         order = np.argsort(dists)
@@ -246,6 +337,7 @@ class ShapeSearchEngine:
             if len(results) >= top_n:
                 break
         return results
+
 
 # -----------------------------
 # Visualization UI
@@ -338,13 +430,19 @@ class ShapeSearchWindow(QWidget):
         query_label = self._current_labels[idx]
         metric = self.cmb_metric.currentText()
         query_idx = self.engine.labels.index(query_label)
-        q_vec = self.engine.features[query_idx]
 
-        dist = compute_weighted_distance(q_vec, q_vec, metric, self.engine.group_weights)
+        if self.engine.weighting_method == 'distance':
+            q_vec = self.engine.features[query_idx]
+            dist = compute_distance_weighted(q_vec, q_vec, metric, self.engine.group_weights, self.engine.dist_stats)
+        else:
+            q_vec = self.engine.features[query_idx]
+            dist = compute_weighted_distance(q_vec, q_vec, metric, self.engine.group_weights)
+
         QMessageBox.information(self, "Self Distance", f"Distance to itself: {dist:.6f}")
 
         # Show only the query in the viewer
         show_results_ui(query_label, [], self.engine.obj_root_dir, title_suffix=f"Self distance: {dist:.6f}")
+
 
 def show_results_ui(query_label: str, similar_labels: List[str], obj_root_dir: str, title_suffix: str):
     query_obj_path = get_obj_path(query_label, obj_root_dir)
@@ -362,6 +460,7 @@ def show_results_ui(query_label: str, similar_labels: List[str], obj_root_dir: s
         )
     plt.interactive()
 
+
 # -----------------------------
 # Main Configuration and Execution
 # -----------------------------
@@ -370,26 +469,33 @@ if __name__ == '__main__':
     FEATURE_JSON = 'ShapeDatabase_INFOMR-master/features.json'
     OBJ_ROOT_DIR = 'ShapeDatabase_INFOMR-master/normalized_5000'
 
-    # --- 2. ADJUST FEATURE WEIGHTS HERE ---
+    # --- 2. CHOOSE WEIGHTING METHOD ---
+    # 'feature': Original method. Weights feature groups before distance calculation.
+    # 'distance': New method. Standardizes per-group distances before applying weights.
+    #
+    # WEIGHTING_METHOD = 'distance'
+    WEIGHTING_METHOD = 'feature'  # This is the original method
+
+    # --- 3. ADJUST FEATURE WEIGHTS HERE ---
     # The weights will be automatically normalized to sum to 1.
     # You can give a feature zero weight by setting it to 0.0.
     MANUAL_WEIGHTS = {
         # Histograms
         'A3': 1.5,
-        'D1': 2.0,
-        'D2': 1.5,
+        'D1': 5.5,
+        'D2': 3.5,
         'D3': 1.0,
         'D4': 1.0,
         # Scalars
-        'Surface area': 1.2,
-        'Sphericity': 1.0,
-        'Rectangularity': 1.0,
+        'Surface area': 1.0,
+        'Sphericity': 1.5,
+        'Rectangularity': 1.5,
         'Diameter': 1.0,
-        'Convexity': 1.0,
-        'Eccentricity': 1.0,
+        'Convexity': 0.4,
+        'Eccentricity': 1.5,
     }
 
-    # --- 3. SET DEFAULTS ---
+    # --- 4. SET DEFAULTS ---
     DEFAULT_METRIC = 'euclidean'
 
     # --- EXECUTION ---
@@ -399,7 +505,7 @@ if __name__ == '__main__':
 
     app = QApplication.instance() or QApplication(sys.argv)
     try:
-        engine = ShapeSearchEngine(FEATURE_JSON, OBJ_ROOT_DIR, MANUAL_WEIGHTS)
+        engine = ShapeSearchEngine(FEATURE_JSON, OBJ_ROOT_DIR, MANUAL_WEIGHTS, weighting_method=WEIGHTING_METHOD)
         win = ShapeSearchWindow(engine, default_metric=DEFAULT_METRIC)
         win.resize(520, 160)
         win.show()
