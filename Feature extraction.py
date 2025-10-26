@@ -7,11 +7,13 @@ import numpy as np
 import trimesh
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from unicodedata import category
+
 # -----------------------------
 # Fixed descriptor ranges (unit AABB-diagonal scaling)
 # -----------------------------
 RANGES: Dict[str, Tuple[float, float]] = {
-    'D1': (0.0, 0.5),    # distance to centroid (origin)
+    'D1': (0.0, 0.6),    # distance to centroid (origin)
     'D2': (0.0, 1.0),    # pairwise point distance
     'A3': (0.0, 180.0),  # triangle angle (deg)
     'D3': (0.0, 0.7),    # sqrt(area), padded (tight ~0.658)
@@ -25,7 +27,15 @@ DEFAULT_BINS: Dict[str, int] = {k: 20 for k in RANGES.keys()}
 # -----------------------------
 # Geometry utilities and repair
 # -----------------------------
+
 def repair_mesh(mesh: trimesh.Trimesh) -> None:
+    # Fill holes first if mesh is not watertight
+    try:
+        if not mesh.is_watertight:
+            trimesh.repair.fill_holes(mesh)
+    except Exception:
+        pass
+
     # Remove broken/duplicate topology
     for fn in (
         getattr(mesh, 'remove_unreferenced_vertices', None),
@@ -38,6 +48,7 @@ def repair_mesh(mesh: trimesh.Trimesh) -> None:
                 fn()
         except Exception:
             pass
+
     # Fix normals and winding
     try:
         trimesh.repair.fix_normals(mesh)
@@ -47,13 +58,8 @@ def repair_mesh(mesh: trimesh.Trimesh) -> None:
         trimesh.repair.fix_winding(mesh)
     except Exception:
         pass
-    # Fill holes if not watertight
-    try:
-        if not mesh.is_watertight:
-            trimesh.repair.fill_holes(mesh)
-    except Exception:
-        pass
-    # Cleanup
+
+    # Final cleanup attempt
     try:
         mesh.remove_unreferenced_vertices()
     except Exception:
@@ -137,11 +143,20 @@ def descriptor_d4_cuberoot_tetra_volume(points: np.ndarray, n_samples: int, rng:
 # -----------------------------
 def compute_convex_hull_metrics(original_mesh: trimesh.Trimesh) -> dict:
     """
-    Convex hull based metrics. Volumes are non‑negative (abs) and convexity clamped to [0,1].
+    Convex hull based metrics. Repair is applied only to a copy when computing
+    the original mesh volume (used for convexity), so general mesh state is not mutated.
     """
     # Original (possibly non‑watertight) mesh volume (signed -> make positive)
     try:
-        original_volume = float(original_mesh.volume)
+        # Use a repaired copy to get a more stable original volume for convexity
+        mesh_for_volume = original_mesh.copy()
+        try:
+            repair_mesh(mesh_for_volume)
+        except Exception:
+            # If repair fails, continue with the copy as-is
+            pass
+
+        original_volume = float(mesh_for_volume.volume)
         if np.isfinite(original_volume):
             original_volume = abs(original_volume)
         else:
@@ -149,7 +164,7 @@ def compute_convex_hull_metrics(original_mesh: trimesh.Trimesh) -> dict:
     except Exception:
         original_volume = float('nan')
 
-    # Convex hull
+    # Convex hull (use the original mesh for hull computation)
     try:
         hull = original_mesh.convex_hull
     except Exception:
@@ -187,7 +202,6 @@ def compute_convex_hull_metrics(original_mesh: trimesh.Trimesh) -> dict:
 
     if hull_volume > 0 and np.isfinite(original_volume):
         convexity = original_volume / hull_volume
-        # Numerical tolerance; enforce valid range
         if not np.isfinite(convexity):
             convexity = float('nan')
         else:
@@ -235,26 +249,22 @@ def l1_normalized_histogram(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
 # Single-file worker
 # -----------------------------
 def extract_features_for_single_mesh(
-    obj_path: str,
-    rel_path: str,
-    out_path: str,
-    edges: Dict[str, np.ndarray],
-    n_samples: int,
-    surface_points: int
-) -> Tuple[str, bool, str]:
+        obj_path: str,
+        rel_path: str,
+        out_path: str,
+        edges: Dict[str, np.ndarray],
+        n_samples: int,
+        surface_points: int
+) -> Tuple[str, bool, object]:
     try:
+        # Split relative path into category and object name
+        if '/' in rel_path:
+            category, obj_name = rel_path.split('/', 1)
+        else:
+            category, obj_name = 'Unknown', rel_path
+
         mesh = trimesh.load(obj_path, force='mesh')
-        if not isinstance(mesh, trimesh.Trimesh):
-            try:
-                mesh = mesh.dump().sum()
-            except Exception:
-                geoms = getattr(mesh, 'geometry', {})
-                mesh = trimesh.util.concatenate(list(geoms.values()))
-        repair_mesh(mesh)
-
-        # Metrics now from convex hull; convexity uses original mesh volume
         metrics = compute_convex_hull_metrics(mesh)
-
         rng = deterministic_rng_from_relpath(rel_path)
         points = sample_surface_points_weighted(mesh, surface_points, rng)
 
@@ -270,40 +280,41 @@ def extract_features_for_single_mesh(
         d3_hist = l1_normalized_histogram(d3, edges['D3'])
         d4_hist = l1_normalized_histogram(d4, edges['D4'])
 
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
+                       "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
 
-        def to_csv(arr: np.ndarray) -> str:
-            return ','.join(map(str, arr.tolist()))
+        # Start row with object name and category
+        row: List[object] = [obj_name, category]
 
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write('Metrics:\n')
-            for k, v in metrics.items():
-                if isinstance(v, np.ndarray):
-                    f.write(f'{k}: {to_csv(v)}\n')
-                else:
-                    f.write(f'{k}: {v}\n')
+        for k in metric_keys:
+            v = metrics.get(k)
+            try:
+                row.append(float(v))
+            except (ValueError, TypeError):
+                row.append(float('nan'))
 
-            f.write('\nD1_hist:\n' + to_csv(d1_hist) + '\n')
-            f.write('\nD2_hist:\n' + to_csv(d2_hist) + '\n')
-            f.write('\nA3_hist:\n' + to_csv(a3_hist) + '\n')
-            f.write('\nD3_hist:\n' + to_csv(d3_hist) + '\n')
-            f.write('\nD4_hist:\n' + to_csv(d4_hist) + '\n')
+        ext = metrics.get('extents', np.array([float('nan')] * 3))
+        for i in range(3):
+            try:
+                row.append(float(ext[i]))
+            except (ValueError, TypeError, IndexError):
+                row.append(float('nan'))
 
-        return (obj_path, True, '')
+        for arr in (d1_hist, d2_hist, a3_hist, d3_hist, d4_hist):
+            row.extend([float(x) for x in np.asarray(arr, dtype=float).tolist()])
+
+        return (obj_path, True, row)
     except Exception as e:
         return (obj_path, False, str(e))
 
 
-# -----------------------------
-# Parallel extraction driver
-# -----------------------------
 def extract_features_for_all_meshes(
-    base_dir: str = 'ShapeDatabase_INFOMR-master/remeshing_flipping1',
-    features_dir: str = 'ShapeDatabase_INFOMR-master/Features',
-    n_samples: int = 250000,
-    bins_dict: Dict[str, int] = None,
-    surface_points: int = 20000,
-    max_workers: int = max(1, os.cpu_count() or 1)
+        base_dir: str = 'ShapeDatabase_INFOMR-master/normalized_5000',
+        features_dir: str = 'ShapeDatabase_INFOMR-master',
+        n_samples: int = 250000,
+        bins_dict: Dict[str, int] = None,
+        surface_points: int = 20000,
+        max_workers: int = max(1, os.cpu_count() or 1)
 ) -> None:
     if bins_dict is None:
         bins_dict = DEFAULT_BINS.copy()
@@ -314,35 +325,55 @@ def extract_features_for_all_meshes(
         for file in files:
             if file.lower().endswith('.obj'):
                 obj_path = os.path.join(root, file)
-                rel_path = os.path.relpath(obj_path, base_dir)
-                out_path = os.path.join(features_dir, os.path.splitext(rel_path)[0] + '.txt')
+                rel_path = os.path.relpath(obj_path, base_dir).replace('\\', '/')  # Normalize path separators
+                out_path = os.path.join(features_dir, os.path.splitext(rel_path)[0] + '.csv')
                 tasks.append((obj_path, rel_path, out_path))
 
     if not tasks:
         print('No .obj files found.')
         return
 
+    # Add 'Relative Path' as the first column in the header
+    metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
+                   "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
+    header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]
+
+    hist_order = ['D1', 'D2', 'A3', 'D3', 'D4']
+    for k in hist_order:
+        n_bins = len(edges[k]) - 1
+        header += [f'{k}_bin_{i}' for i in range(n_bins)]
+
+    os.makedirs(features_dir, exist_ok=True)
+    out_csv = os.path.join(features_dir, 'all_features.csv')
+
     work_total = len(tasks)
     print(f'Processing {work_total} meshes with {max_workers} workers...')
     print(f'Settings: surface_points={surface_points}, n_samples={n_samples}, bins={list(bins_dict.values())[0]}')
 
     done = 0
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futs = [ex.submit(extract_features_for_single_mesh, obj, rel, outp, edges, n_samples, surface_points) for (obj, rel, outp) in tasks]
-        for fut in as_completed(futs):
-            obj_path, ok, err = fut.result()
-            done += 1
-            if ok:
-                print(f'[{done}/{work_total}] Saved features for {os.path.basename(obj_path)}')
-            else:
-                print(f'[{done}/{work_total}] FAILED for {os.path.basename(obj_path)}: {err}')
+    import csv
+    with open(out_csv, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            futs = [ex.submit(extract_features_for_single_mesh, obj, rel, outp, edges, n_samples, surface_points) for
+                    (obj, rel, outp) in tasks]
+            for fut in as_completed(futs):
+                obj_path, ok, payload = fut.result()
+                done += 1
+                if ok and isinstance(payload, list):
+                    writer.writerow(payload)
+                    print(f'[{done}/{work_total}] Saved features for {os.path.basename(obj_path)}')
+                else:
+                    print(f'[{done}/{work_total}] FAILED for {os.path.basename(obj_path)}: {payload}')
 
 
 if __name__ == '__main__':
     # Windows-safe entry point
     extract_features_for_all_meshes(
-        base_dir='ShapeDatabase_INFOMR-master/after_remeshing_normalise',
-        features_dir='ShapeDatabase_INFOMR-master/Features',
+        base_dir='ShapeDatabase_INFOMR-master/normalized_5000',
+        features_dir='ShapeDatabase_INFOMR-master',
         # Higher quality sampling settings
         n_samples=250000,
         surface_points=5000,

@@ -1,126 +1,173 @@
 import os
-import json
 import math
+import csv
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
+CSV_PATH = 'ShapeDatabase_INFOMR-master/all_features.csv'
+OUT_DIR = 'plots'
+
+HIST_PREFIXES = ['D1', 'D2', 'D3', 'D4', 'A3']
+
+
+def normalize_relpath(p: str) -> str:
+    if not p:
+        return ''
+    return p.replace('\\', '/').lstrip('./')
+
+
+def to_float_or_nan(v):
+    try:
+        if v is None or v == '':
+            return np.nan
+        return float(v)
+    except Exception:
+        return np.nan
+
+
+def load_features_from_csv(csv_path: str) -> dict:
+    with open(csv_path, newline='', encoding='utf-8') as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = reader.fieldnames or []
+
+        # Assume first column is 'object', second is 'category'
+        if len(fieldnames) < 2:
+            raise ValueError('CSV must have at least two columns: object and category.')
+
+        hist_cols = {h: [] for h in HIST_PREFIXES}
+        for fn in fieldnames:
+            for h in HIST_PREFIXES:
+                if fn.startswith(f'{h}_'):
+                    hist_cols[h].append(fn)
+
+        for h in HIST_PREFIXES:
+            def _bin_idx(col):
+                try:
+                    return int(col.split('_')[-1])
+                except (ValueError, IndexError):
+                    return -1
+            hist_cols[h].sort(key=_bin_idx)
+
+        excluded = {fieldnames[0], fieldnames[1]}  # Exclude object and category columns
+        for cols in hist_cols.values():
+            excluded.update(cols)
+
+        extent_keys = [k for k in ['extents_0', 'extents_1', 'extents_2'] if k in fieldnames]
+        excluded.update(extent_keys)
+
+        all_features = {}
+        for row in reader:
+            obj = row.get(fieldnames[0], '').strip()
+            category = row.get(fieldnames[1], '').strip()
+            if not obj or not category:
+                continue
+            rel_path = os.path.join(category, obj).replace('\\', '/')
+
+            histograms = {}
+            for h, cols in hist_cols.items():
+                if not cols:
+                    continue
+                vals = np.array([to_float_or_nan(row.get(c)) for c in cols], dtype=float)
+                vals = np.nan_to_num(vals, nan=0.0)
+                s = float(vals.sum())
+                if s > 0:
+                    vals /= s
+                histograms[h] = vals
+
+            metrics = {}
+            for fn in fieldnames:
+                if fn in excluded:
+                    continue
+                val = to_float_or_nan(row.get(fn))
+                if not np.isnan(val):
+                    metrics[fn] = float(val)
+
+            if extent_keys:
+                ext = np.array([to_float_or_nan(row.get(k)) for k in extent_keys], dtype=float)
+                metrics['extents'] = np.nan_to_num(ext)
+
+            all_features[rel_path] = {
+                'category': category,
+                'metrics': metrics,
+                'histograms': histograms,
+            }
+
+    return all_features
+
+
 def collect_category_data(all_features: dict):
-    """Collects histogram data from the features dictionary, grouped by category."""
-    descriptors = ['D1', 'D2', 'A3', 'D3', 'D4']
-    data = {d: defaultdict(list) for d in descriptors}
+    desc_to_cat_arrays = {h: defaultdict(list) for h in HIST_PREFIXES}
+    for feat in all_features.values():
+        cat = feat.get('category', 'Unknown')
+        hists = feat.get('histograms', {})
+        for h, arr in hists.items():
+            if h in desc_to_cat_arrays and arr.size > 0:
+                desc_to_cat_arrays[h][cat].append(arr)
+    return {d: c for d, c in desc_to_cat_arrays.items() if any(c.values())}
 
-    for rel_path, features in all_features.items():
-        # Extract category from relative path (e.g., 'ants' from 'ants/D00004.obj')
-        category = os.path.dirname(rel_path)
-        if not category:
-            continue
 
-        if 'histograms' in features:
-            for d in descriptors:
-                if d in features['histograms']:
-                    # Convert list back to numpy array for processing/plotting
-                    hist_array = np.asarray(features['histograms'][d], dtype=float)
-                    data[d][category].append(hist_array)
-    return data
-
-def plot_descriptor_grid(descriptor, cat_to_arrays, out_dir, linewidth=0.9):
-    """Plots a grid of histograms for a given descriptor, one subplot per category."""
+def plot_descriptor_grid(descriptor, cat_to_arrays, out_dir, linewidth=1.5, alpha=0.9):
     cats = sorted(cat_to_arrays.keys())
     if not cats:
         return
 
     n = len(cats)
-    cols = min(5, n)
+    cols = 6
     rows = math.ceil(n / cols)
-    fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 3*rows), squeeze=False)
-    axes = axes.flatten()
+    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 2.8 * rows), squeeze=False)
 
-    for ax_idx, cat in enumerate(cats):
-        ax = axes[ax_idx]
-        arrays = cat_to_arrays[cat]
-        if not arrays:
-            ax.set_title(cat)
-            ax.set_axis_off()
+    for i, cat in enumerate(cats):
+        r, c = divmod(i, cols)
+        ax = axes[r][c]
+
+        hist_list = cat_to_arrays.get(cat, [])
+        if not hist_list:
+            ax.axis('off')
             continue
 
-        # Unique color per line using a continuous colormap
-        cmap = plt.get_cmap('nipy_spectral')
-        colors = cmap(np.linspace(0, 1, len(arrays)))
+        num_items = len(hist_list)
+        cmap = plt.get_cmap('Set1')
+        base_colors = [cmap(j % cmap.N) for j in range(num_items)]
 
-        for arr, c in zip(arrays, colors):
-            x = np.arange(len(arr))
-            ax.plot(x, arr, color=c, linewidth=linewidth)
+        max_y = 0
+        for j, hist_values in enumerate(hist_list):
+            x = np.arange(hist_values.size)
+            ax.plot(x, hist_values, lw=linewidth, color=base_colors[j], alpha=alpha)
+            if hist_values.size > 0:
+                max_y = max(max_y, np.max(hist_values))
 
-        ax.set_title(cat, fontsize=9)
-        ax.set_xlabel('Bin', fontsize=8)
-        ax.set_ylabel('Count', fontsize=8)
-        ax.tick_params(labelsize=8)
+        ax.set_title(f"{cat} ({num_items} items)", fontsize=9)
+        ax.set_ylim(0, max(1e-6, max_y * 1.1))
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.grid(True, axis='y', alpha=0.25, linestyle='--')
 
-    for j in range(len(cats), len(axes)):
-        axes[j].set_axis_off()
+    for j in range(n, rows * cols):
+        r, c = divmod(j, cols)
+        axes[r][c].axis('off')
 
-    fig.suptitle(f'{descriptor} histograms by category', fontsize=12)
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-
+    fig.suptitle(f'{descriptor} Histograms by Category', fontsize=12)
+    fig.tight_layout(rect=[0, 0.02, 1, 0.95])
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f'{descriptor}_by_category.png')
-    fig.savefig(out_path, dpi=200)
+    out_path = os.path.join(out_dir, f'2grid_{descriptor}.png')
+    fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    print(f'Saved {descriptor} figure to: {out_path}')
 
-def collect_metric_values(all_features: dict, metric_name: str):
-    """Collects all values for a given numerical metric from the features dictionary."""
-    values = []
-    for features in all_features.values():
-        if 'metrics' in features and metric_name in features['metrics']:
-            value = features['metrics'][metric_name]
-            # Ensure the metric is a number (not a list like 'extents')
-            if isinstance(value, (int, float)):
-                values.append(value)
-    return values
-
-def plot_metric_histogram(values, metric_name, out_dir):
-    """Plots a single histogram for a given numerical metric."""
-    if not values:
-        print(f'No values found for metric: {metric_name}')
-        return
-    os.makedirs(out_dir, exist_ok=True)
-    plt.figure(figsize=(7, 4))
-    plt.hist(values, bins=40, color='teal', edgecolor='black', alpha=0.8)
-    plt.title(f'{metric_name.capitalize()} Distribution (all objects)')
-    plt.xlabel(metric_name.capitalize())
-    plt.ylabel('Count')
-    plt.tight_layout()
-    out_path = os.path.join(out_dir, f'{metric_name}_histogram.png')
-    plt.savefig(out_path, dpi=200)
-    plt.close()
-    print(f'Saved {metric_name} histogram to: {out_path}')
 
 def main():
-    """Loads features from JSON and generates plots."""
-    json_path = os.path.join('ShapeDatabase_INFOMR-master', 'Features', 'features.json')
-    out_dir = 'plots'
+    all_features = load_features_from_csv(CSV_PATH)
 
-    if not os.path.exists(json_path):
-        print(f"Error: JSON file not found at '{json_path}'")
-        return
+    desc_to_cats = collect_category_data(all_features)
+    os.makedirs(OUT_DIR, exist_ok=True)
 
-    print(f"Loading features from '{json_path}'...")
-    with open(json_path, 'r', encoding='utf-8') as f:
-        all_features = json.load(f)
-    print(f"Loaded data for {len(all_features)} meshes.")
+    for descriptor, cat_to_arrays in desc_to_cats.items():
+        if not cat_to_arrays:
+            continue
+        print(f"Plotting descriptor: {descriptor}")
+        plot_descriptor_grid(descriptor, cat_to_arrays, OUT_DIR)
 
-    # Generate descriptor plots
-    hist_data = collect_category_data(all_features)
-    for descriptor, cat_to_arrays in hist_data.items():
-        plot_descriptor_grid(descriptor, cat_to_arrays, out_dir)
-
-    # Generate histograms for specified numerical metrics
-    metrics_to_plot = ['convexity', 'compactness', 'sphericity']
-    for metric in metrics_to_plot:
-        values = collect_metric_values(all_features, metric)
-        plot_metric_histogram(values, metric, out_dir)
 
 if __name__ == '__main__':
     main()

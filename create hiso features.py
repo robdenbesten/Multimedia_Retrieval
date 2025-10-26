@@ -1,17 +1,18 @@
+# python
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import json
+import csv
 
-# Path to the features JSON file
-JSON_PATH = 'ShapeDatabase_INFOMR-master/Features/features.json'
+# Path to the features CSV file
+CSV_PATH = 'ShapeDatabase_INFOMR-master/all_features.csv'
 
-# List of relative paths for the objects to plot
+# List of relative paths for the objects to plot (original separators kept; they are normalized at lookup)
 selected_rel_paths = [
-    'AircraftBuoyant\\m1338.obj',    # round
-    'Cellphone\\D00192.obj',         # flat
-    'Bottle\\D00166.obj',            # elongated
-    'Quadruped\\D00226.obj',         # irregular
+    'm1338.obj',    # round
+    'D00192.obj',         # flat
+    'D00166.obj',            # elongated
+    'D00226.obj',         # irregular
 ]
 
 row_labels = ['A3', 'D1', 'D2', 'D3', 'D4']
@@ -24,15 +25,94 @@ col_labels = [
 ]
 row_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
-def load_features(json_path):
-    with open(json_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+def normalize_relpath(p: str) -> str:
+    if p is None:
+        return p
+    return p.replace('\\', '/').lstrip('./')
+
+def load_features(csv_path):
+    """
+    Load features from a single CSV (`Relative Path` + metrics + ext bins).
+    Normalizes relative path keys to use forward slashes.
+    Returns dict: rel_path -> {'metrics': {.., 'extents': np.array}, 'histograms': {'D1': arr, ...}}
+    """
+    hist_order = ['D1', 'D2', 'A3', 'D3', 'D4']
+    metric_keys = [
+        "Mesh volume", "Surface area", "Diameter", "Compactness",
+        "Rectangularity", "Convexity", "Eccentricity", "Sphericity"
+    ]
+    ext_keys = ['extents_0', 'extents_1', 'extents_2']
+
+    features = {}
+    with open(csv_path, newline='', encoding='utf-8') as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        header = [h.strip() for h in header]
+        # map header name -> index
+        h2i = {h: i for i, h in enumerate(header)}
+
+        # precompute histogram column groups (keep header order)
+        hist_cols = {}
+        for h in hist_order:
+            cols = [col for col in header if col.startswith(h + '_bin_')]
+            cols.sort(key=lambda c: header.index(c))
+            hist_cols[h] = cols
+
+        rel_key = 'Object'
+        if rel_key not in h2i:
+            raise ValueError(f"CSV missing required column `{rel_key}`")
+
+        for row in reader:
+            # pad row if shorter than header
+            if len(row) < len(header):
+                row = row + [''] * (len(header) - len(row))
+
+            raw_rel = row[h2i[rel_key]].strip()
+            rel_path = normalize_relpath(raw_rel)
+            metrics = {}
+
+            for k in metric_keys:
+                if k in h2i:
+                    try:
+                        metrics[k] = float(row[h2i[k]])
+                    except Exception:
+                        metrics[k] = float('nan')
+                else:
+                    metrics[k] = float('nan')
+
+            # extents as numpy array
+            ex = []
+            for ek in ext_keys:
+                if ek in h2i:
+                    try:
+                        ex.append(float(row[h2i[ek]]))
+                    except Exception:
+                        ex.append(float('nan'))
+                else:
+                    ex.append(float('nan'))
+            metrics['extents'] = np.array(ex, dtype=float)
+
+            # histograms
+            hists = {}
+            for h, cols in hist_cols.items():
+                vals = []
+                for c in cols:
+                    try:
+                        vals.append(float(row[header.index(c)]))
+                    except Exception:
+                        vals.append(0.0)
+                hists[h] = np.array(vals, dtype=float)
+
+            features[rel_path] = {'metrics': metrics, 'histograms': hists}
+
+    return features
 
 def get_histograms_for_selected(features, rel_paths):
     # Returns a list of dicts: each dict has histograms for one object
     all_files_data = []
     for rel_path in rel_paths:
-        data = features.get(rel_path)
+        key = normalize_relpath(rel_path)
+        data = features.get(key)
         if data and 'histograms' in data:
             all_files_data.append(data['histograms'])
         else:
@@ -40,15 +120,20 @@ def get_histograms_for_selected(features, rel_paths):
     return all_files_data
 
 def plot_histogram(ax, hist_values, color):
-    if hist_values is None:
+    if hist_values is None or len(hist_values) == 0:
         return
     x = np.arange(len(hist_values))
     bars = ax.bar(
         x, hist_values, color=color, edgecolor='white', alpha=0.85, linewidth=1.5
     )
     ax.set_ylim(bottom=0)
+    max_val = float(np.max(hist_values)) if np.any(hist_values) else 0.0
+    # avoid division by zero / invalid ticks
+    if max_val > 0:
+        ax.set_yticks(np.linspace(0, max_val, num=5))
+    else:
+        ax.set_yticks([0.0])
     ax.set_xticks([])
-    ax.set_yticks(np.linspace(0, max(hist_values), num=5, dtype=int))
     ax.set_ylabel('Count')
     ax.yaxis.grid(True, linestyle='--', alpha=0.5)
     for bar in bars:
@@ -62,7 +147,8 @@ def plot_histogram(ax, hist_values, color):
 def get_metrics_for_selected(features, rel_paths):
     metrics_list = []
     for rel_path in rel_paths:
-        data = features.get(rel_path)
+        key = normalize_relpath(rel_path)
+        data = features.get(key)
         if data and 'metrics' in data:
             metrics_list.append(data['metrics'])
         else:
@@ -86,10 +172,8 @@ def metrics_barplot(metrics_list, labels, colors):
         'Eccentricity'
     ]
 
-
-    # Normalize keys to match JSON (lowercase, underscores)
     x = np.arange(len(keys))
-    width = 0.8 / len(metrics_list)
+    width = 0.8 / max(1, len(metrics_list))
 
     fig, ax = plt.subplots(figsize=(12, 5))
     for i, (vals, label, color) in enumerate(zip(metrics_list, labels, colors)):
@@ -104,7 +188,7 @@ def metrics_barplot(metrics_list, labels, colors):
     plt.show()
 
 def main():
-    features = load_features(JSON_PATH)
+    features = load_features(CSV_PATH)
     all_files_data = get_histograms_for_selected(features, selected_rel_paths)
 
     for i, (hist_key, color) in enumerate(zip(row_hist_keys, row_colors)):

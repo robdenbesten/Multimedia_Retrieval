@@ -1,6 +1,8 @@
 import os
 import json
 import sys
+import csv
+import pandas as pd
 from typing import Callable, List, Dict
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -42,23 +44,48 @@ GROUP_SLICES = compute_group_slices()
 # -----------------------------
 # Feature Parsing and Normalization
 # -----------------------------
-def parse_feature_from_entry(entry: Dict) -> np.ndarray:
-    """Parses a single entry from the JSON file into a raw feature vector."""
-    # 1. Histograms
-    all_hist_values = []
-    for key in HIST_KEYS:
-        vals = entry.get('histograms', {}).get(key, [0.0] * HIST_BINS)
-        if not vals or len(vals) != HIST_BINS:
-            vals = [0.0] * HIST_BINS
-        all_hist_values.extend(vals)
-    # 2. Scalar features
-    scalar_values = []
-    for key in SCALAR_KEYS:
-        scalar_values.append(float(entry.get('metrics', {}).get(key, 0.0)))
-    # 3. Combine
-    feature_vector = np.array(all_hist_values + scalar_values, dtype=float)
-    feature_vector = np.nan_to_num(feature_vector, nan=0.0, posinf=0.0, neginf=0.0)
-    return feature_vector
+def load_dataset(csv_path: str, models_dir: str | None = None, has_header: bool = False):
+    # Read CSV; the file has no header in your sample
+    df = pd.read_csv(csv_path, header=0 if has_header else None, comment="#", engine="python")
+
+    if has_header:
+        required = {"object", "category"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
+    else:
+        # Rename first two columns to `object`, `category`
+        df = df.rename(columns={0: "object", 1: "category"})
+
+    # Drop trailing completely empty columns (if any)
+    if df.shape[1] > 2:
+        empty_cols = [c for c in df.columns[2:] if df[c].isna().all()]
+        if empty_cols:
+            df = df.drop(columns=empty_cols)
+
+    # Convert feature columns to numeric
+    feat_df = df.iloc[:, 2:].apply(pd.to_numeric, errors="coerce")
+
+    # Drop rows with no valid numeric features
+    mask_all_nan = feat_df.isna().all(axis=1)
+    if mask_all_nan.any():
+        df = df.loc[~mask_all_nan].reset_index(drop=True)
+        feat_df = feat_df.loc[~mask_all_nan].reset_index(drop=True)
+
+    # Fill remaining NaNs with 0.0 (or use another strategy)
+    feat_df = feat_df.fillna(0.0)
+
+    # Outputs commonly needed downstream
+    X = feat_df.to_numpy(dtype=np.float32)           # features
+    y = df["category"].astype(str).to_numpy()        # labels
+    obj_ids = df["object"].astype(str).to_numpy()    # object ids / filenames
+
+    # Optional: if you still need full paths, build them from a base directory
+    if models_dir:
+        df["model_path"] = [os.path.normpath(os.path.join(models_dir, o)) for o in obj_ids]
+
+    return df, X, y, obj_ids
+
 
 
 def normalize_features(features: np.ndarray) -> np.ndarray:
@@ -240,10 +267,9 @@ def compute_distance_weighted(
 # Shape Search Engine
 # -----------------------------
 class ShapeSearchEngine:
-    def __init__(self, feature_json_path: str, obj_root_dir: str, group_weights: Dict[str, float],
+    def __init__(self, feature_csv_path: str, obj_root_dir: str, group_weights: Dict[str, float],
                  weighting_method: str = 'feature'):
         self.obj_root_dir = obj_root_dir
-        self.labels: List[str] = []
         self.metric_map = {
             'euclidean': 'euclidean', 'manhattan': 'manhattan', 'cosine': 'cosine',
             'emd': 'emd', 'chi-squared': 'chi-squared',
@@ -253,18 +279,20 @@ class ShapeSearchEngine:
         self.weighting_method = weighting_method
         self.dist_stats: Dict[str, Dict[str, tuple]] = {}
 
-        with open(feature_json_path, 'r') as f:
-            data = json.load(f)
+        try:
+            # Use the load_dataset function to read and parse the CSV
+            df, raw_feats, categories, obj_ids = load_dataset(feature_csv_path, models_dir=obj_root_dir)
+        except FileNotFoundError:
+            raise RuntimeError(f"Feature CSV file not found at '{feature_csv_path}'")
+        except Exception as e:
+            raise RuntimeError(f"Failed to read or parse CSV file: {e}")
 
-        raw_feats = []
-        for label, entry in data.items():
-            self.labels.append(label)
-            raw_feats.append(parse_feature_from_entry(entry))
+        if raw_feats.shape[0] == 0:
+            raise RuntimeError("No features loaded from CSV file. Check file content.")
 
-        if not raw_feats:
-            raise RuntimeError("No features loaded from JSON file.")
-
-        self.raw_features = np.stack(raw_feats, axis=0)
+        # The 'labels' should be in the format 'category/object_id' for the UI to work correctly
+        self.labels = [os.path.join(cat, obj) for cat, obj in zip(categories, obj_ids)]
+        self.raw_features = raw_feats
         self.features = normalize_features(self.raw_features)
 
         if self.weighting_method == 'distance':
@@ -466,7 +494,8 @@ def show_results_ui(query_label: str, similar_labels: List[str], obj_root_dir: s
 # -----------------------------
 if __name__ == '__main__':
     # --- 1. CONFIGURE FILE PATHS ---
-    FEATURE_JSON = 'ShapeDatabase_INFOMR-master/features.json'
+    # The script now reads from a CSV file.
+    FEATURE_CSV = 'ShapeDatabase_INFOMR-master/all_features.csv'
     OBJ_ROOT_DIR = 'ShapeDatabase_INFOMR-master/normalized_5000'
 
     # --- 2. CHOOSE WEIGHTING METHOD ---
@@ -481,31 +510,33 @@ if __name__ == '__main__':
     # You can give a feature zero weight by setting it to 0.0.
     MANUAL_WEIGHTS = {
         # Histograms
-        'A3': 1.5,
-        'D1': 5.5,
-        'D2': 3.5,
-        'D3': 1.0,
-        'D4': 1.0,
+        'A3': 2.0,
+        'D1': 1.0,
+        'D2': 2.0,
+        'D3': 2.0,
+        'D4': 2.0,
         # Scalars
         'Surface area': 1.0,
-        'Sphericity': 1.5,
-        'Rectangularity': 1.5,
+        'Sphericity': 1.0,
+        'Rectangularity': 1.0,
         'Diameter': 1.0,
-        'Convexity': 0.4,
-        'Eccentricity': 1.5,
+        'Convexity': 1.0,
+        'Eccentricity': 1.0,
     }
 
     # --- 4. SET DEFAULTS ---
     DEFAULT_METRIC = 'euclidean'
 
     # --- EXECUTION ---
-    if not os.path.exists(FEATURE_JSON):
-        QMessageBox.critical(None, "Error", f"Feature file not found at '{FEATURE_JSON}'")
+    if not os.path.exists(FEATURE_CSV):
+        # This check is now inside the ShapeSearchEngine, but we keep a basic one here for early exit.
+        QMessageBox.critical(None, "Error", f"Feature file not found at '{FEATURE_CSV}'")
         sys.exit(1)
 
     app = QApplication.instance() or QApplication(sys.argv)
     try:
-        engine = ShapeSearchEngine(FEATURE_JSON, OBJ_ROOT_DIR, MANUAL_WEIGHTS, weighting_method=WEIGHTING_METHOD)
+        # Pass the CSV path to the engine
+        engine = ShapeSearchEngine(FEATURE_CSV, OBJ_ROOT_DIR, MANUAL_WEIGHTS, weighting_method=WEIGHTING_METHOD)
         win = ShapeSearchWindow(engine, default_metric=DEFAULT_METRIC)
         win.resize(520, 160)
         win.show()
