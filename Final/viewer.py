@@ -1,14 +1,16 @@
 import sys
 import os
 import shutil
+import csv
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
                              QWidget, QLabel, QComboBox, QListWidget, QCheckBox)
 from PyQt6.QtCore import Qt
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load, Line
 
-# Import the Mesh class
+# Import the Mesh class and feature extraction
 from normalise import Mesh
+from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
 REMESHED_OUTPUT_DIR = 'remeshed_output'
@@ -22,6 +24,10 @@ class MeshViewer(QMainWindow):
         self.normalized_file = None
         self.database_location = DATABASE_LOCATION
         self.show_normalized = False  # Track toggle state
+        
+        # Initialize feature extraction bins
+        self.edges = make_fixed_bin_edges(DEFAULT_BINS)
+        
         self.init_ui()
         
     def init_ui(self):
@@ -152,6 +158,11 @@ class MeshViewer(QMainWindow):
                 self.mesh_object.full_normalize()
                 self.normalized_file = self.mesh_object.save()
                 
+                # Extract features from normalized mesh
+                self.status_label.setText(f'Extracting features:\n{os.path.basename(file_path)}')
+                QApplication.processEvents()
+                self.extract_features()
+                
                 # Enable checkbox
                 self.normalize_checkbox.setEnabled(True)
                 
@@ -186,6 +197,64 @@ class MeshViewer(QMainWindow):
         except Exception as e:
             self.status_label.setText(f'Error toggling view:\n{e}')
 
+    def extract_features(self):
+        """Extract features from the normalized mesh and save to CSV"""
+        if not self.normalized_file or not os.path.exists(self.normalized_file):
+            print("No normalized file to extract features from")
+            return
+        
+        try:
+            # Get category and object name
+            category = self.category_dropdown.currentText()
+            obj_name = os.path.basename(self.current_file)
+            
+            # Create relative path for deterministic RNG (format: "category/filename.obj")
+            rel_path = f"{category}/{obj_name}"
+            
+            # Output CSV path in remeshed_output folder
+            feature_filename = os.path.splitext(os.path.basename(self.normalized_file))[0] + '_features.csv'
+            out_path = os.path.join(REMESHED_OUTPUT_DIR, feature_filename)
+            
+            # Settings matching all_features.csv generation
+            n_samples = 250000
+            surface_points = 5000
+            
+            # Call the feature extraction function
+            obj_path_result, success, result = extract_features_for_single_mesh(
+                obj_path=self.normalized_file,
+                rel_path=rel_path,
+                out_path=out_path,
+                edges=self.edges,
+                n_samples=n_samples,
+                surface_points=surface_points
+            )
+            
+            if success and isinstance(result, list):
+                # Create CSV header matching all_features.csv
+                metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
+                              "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
+                header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]
+                
+                # Add histogram bin headers (5 descriptors × 20 bins each)
+                hist_order = ['D1', 'D2', 'A3', 'D3', 'D4']
+                for k in hist_order:
+                    n_bins = 20
+                    header += [f'{k}_bin_{i}' for i in range(n_bins)]
+                
+                # Write CSV file
+                with open(out_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(header)
+                    writer.writerow(result)
+                
+                print(f"Features saved to: {out_path}")
+            else:
+                print(f"Feature extraction failed: {result}")
+                
+        except Exception as e:
+            print(f"Error in extract_features: {e}")
+            import traceback
+            traceback.print_exc()
 
     def display_mesh(self, file_path):
         """Display mesh using vedo for better lighting and style"""

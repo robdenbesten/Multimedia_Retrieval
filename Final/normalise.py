@@ -5,6 +5,7 @@ import trimesh
 
 TARGET_VERTICES = 5000
 ORIGINAL_DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
+NORMALISED_DATABASE_LOCATION = r'Normalised-objects'
 
 
 class Mesh:
@@ -199,11 +200,24 @@ if __name__ == "__main__":
         for file in files:
             if file.endswith('.obj'):
                 file_path = os.path.join(root, file)
+                
+                # Get the category from the directory structure
+                relative_path = os.path.relpath(root, database_path)
+                category = relative_path if relative_path != '.' else ''
+                
+                # Create output directory with category structure
+                if category:
+                    output_dir = os.path.join(NORMALISED_DATABASE_LOCATION, category)
+                else:
+                    output_dir = NORMALISED_DATABASE_LOCATION
+                
                 print(f"\nProcessing: {file_path}")
+                print(f"Will save to: {output_dir}")
+                
                 try:
                     # Create a new Mesh object and process it
                     mesh = Mesh(file_path)
                     mesh.full_normalize()
-                    mesh.save()
+                    mesh.save(output_dir=output_dir, suffix="_rm")
                 except Exception as e:
                     print(f"Failed to process {file}: {e}")
