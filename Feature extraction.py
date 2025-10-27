@@ -2,6 +2,7 @@ import os
 import math
 import hashlib
 from typing import Dict, List, Tuple
+import csv
 
 import numpy as np
 import trimesh
@@ -351,7 +352,6 @@ def extract_features_for_all_meshes(
     print(f'Settings: surface_points={surface_points}, n_samples={n_samples}, bins={list(bins_dict.values())[0]}')
 
     done = 0
-    import csv
     with open(out_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(header)
