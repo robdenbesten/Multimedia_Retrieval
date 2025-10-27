@@ -1,0 +1,198 @@
+\section{3D Shape Descriptors}
+
+In this section, we outline six basic global shape descriptors as well as five distinct shape descriptors used for 3D model feature extraction. These descriptors provide statistical representations of an object's geometry. The goal of these descriptions is to provide features that can be used to compare 3D models. Before all the features are calculated, the shapes are first processed. In this process, we fill the holes that shapes might have to make them watertight, and we fix the windings of the triangles to all wind in the same direction.
+
+To validate the performance and interpretability of each descriptor, we evaluate them on four distinct 3D shapes: a \textit{round} shape (hot air balloon), a \textit{flat} shape (cellphone), an \textit{elongated} shape (bottle), and an \textit{irregular} shape (cow). These reference shapes allow us to assess whether each descriptor behaves as expected across different geometric categories. The shapes are depicted in figure X.
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.32\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/Bike flat.png}
+        \caption*{(1) Flat mesh view}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/Bike_Smooth.png}
+        \caption*{(2) Shaded mesh view}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/BikeFlatWire.png}
+        \caption*{(3) Flat mesh with wireframe overlay}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/BikeSmoothWire.png}
+        \caption*{(4) Shaded mesh with wireframe overlay}
+    \end{subfigure}
+    \caption{The same 3D model (D00462) viewed from different angles and switched between shaded mesh and flat mesh, with or without wireframe overlay.}
+    \label{fig:Guitar different views}
+\end{figure}
+
+\subsection{Basic Global Descriptors}
+These descriptors provide quick and simple measurements of an object’s size, shape, and boundaries. For each descriptor, we describe the purpose, calculation, and how it can be applied for feature comparison.
+
+\subsubsection{Surface Area}
+\textbf{Purpose:} Measures the total area of the object’s outer surface, which helps to understand its overall size and complexity.\\
+\textbf{Calculation:} Add up the areas of all the triangular faces in the object's mesh.\\
+\textbf{Usage:} Can be used to normalise other size-related metrics or as a basic filter for searching by size.
+
+\subsubsection{Diameter}
+\textbf{Purpose:} Defines the largest distance between any two vertices on the object.\\
+\textbf{Calculation:} Find the maximum distance between all pairs of vertices in the mesh.\\
+\textbf{Usage:} Can be used as a measurement of the object's overall size.
+
+\subsubsection{Compactness and Sphericity}
+\textbf{Purpose:} Indicates how similar the object's shape is to a sphere, with values close to 1 implying a compact, perfectly round shape. We normalise this compactness value to get the sphericity. Sphericity sets the value of compactness between 0 and 1, with one representing a perfect sphere and all other shapes having a value less than one.\\
+\textbf{Calculation:}
+\[
+\text{Compactness} = \frac{A^3}{36 \pi V^2}
+\]
+To calculate the sphericity:
+\[
+\text{Sphericity} = \frac{1}{\text{Compactness}}
+\]
+\textbf{Usage:} Helps distinguish between spherical shapes and elongated or flat shapes.
+
+\subsubsection{3D Rectangularity}
+\textbf{Purpose:} Measures how well the object fits into a rectangular box. A value of 1.0 indicates a perfect fit.\\
+\textbf{Calculation:}
+\[
+\text{Rectangularity} = \frac{V}{V_{\text{OBB}}}
+\]
+\textbf{Usage:} Useful for identifying blocky shapes versus irregular ones.
+
+\subsubsection{Convexity}
+\textbf{Purpose:} Measures the smoothness of the object's surface. A fully convex shape has a value of 1.0, indicating no indentations.\\
+\textbf{Calculation:}
+\[
+\text{Convexity} = \frac{V}{V_{\text{hull}}}
+\]
+\textbf{Usage:} Effective for differentiating solid shapes with a high convexity from complex or hollow objects with a low convexity.
+
+\subsubsection{Eccentricity}
+\textbf{Purpose:} Measures how uniform the mass of an object is in all directions. A compact, round object indicates even mass distribution, while elongated or flat objects suggest uneven distribution.\\
+\textbf{Calculation:}
+\[
+\text{Eccentricity} = \frac{\lambda_{\min}}{\lambda_{\max}}
+\]
+where $\lambda_{\min}$ and $\lambda_{\max}$ are the smallest and largest eigenvalues of the covariance matrix, respectively.\\
+\textbf{Usage:} Useful for distinguishing evenly distributed shapes from uneven ones.
+
+\subsection{Comparative Validation of Fundamental Descriptors}
+To understand these global metrics, performance across different shape categories based on their characteristics is examined as depicted in Figure~X. A round shape (hot air balloon), a flat shape (cellphone), an elongated shape (bottle), and an irregular shape (cow) are compared to each other to see if the different descriptors match what we expect.
+
+\textbf{Round Shapes:} These shapes are highly uniform and should result in high sphericity (approaching 1) and high eccentricity (also near 1). They should show lower values for both convexity and rectangularity. This matches what we see in Figure~X.
+
+\textbf{Elongated Shapes:} These shapes should exhibit high rectangularity, as they resemble their oriented bounding box. This is the case for the elongated bottle, which scores the highest in rectangularity.
+
+\textbf{Irregular Shapes:} These shapes commonly register lower scores for convexity and 3D rectangularity due to multiple concavities. This is visible in Figure~X, where the irregularly shaped cow scores low on convexity.
+
+\textbf{Convex Shapes:} These should match their convex hull. Rectangular and elongated shapes are expected to be highly convex, as seen in Figure~X.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
+
+\subsection{D1: Distance Between Barycenter and Random Vertex}
+\textbf{Purpose:} The D1 Shape Distribution measures how an object's shape spreads out and how its points are arranged around its centre.
+
+\textbf{Calculation:}
+\begin{align*}
+b &= \text{barycenter of all vertices}\\
+d_i &= \| v_i - b \|, \quad i = 1, \dots, N
+\end{align*}
+Collect all $d_i$ into a histogram with 10 bins to form descriptor $D_1$.
+
+\textbf{Proof:} Figure~4.0 shows that round objects have a narrow peak (uniform distance to centre), while elongated shapes have a wider distribution.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
+
+\subsection{A3: Angle Between 3 Random Vertices}
+\textbf{Purpose:} The A3 Shape Distribution examines how the angles between triplets of random points on an object's surface vary, revealing shape smoothness or irregularity.
+
+\textbf{Calculation:}
+\[
+\theta = \arccos \left( \frac{a \cdot b}{\|a\| \|b\|} \right)
+\]
+where $a = v_1 - v_2$ and $b = v_3 - v_2$. Collect $N=10{,}000$ such angles into a histogram.
+
+\textbf{Proof:} Figure~4.1 shows that flat models have peaks at lower angles, while round shapes show broader distributions.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
+
+\subsection{D2: Distance Between 2 Random Vertices}
+\textbf{Purpose:} The D2 descriptor characterises a shape based on the distribution of Euclidean distances between random vertex pairs.
+
+\textbf{Calculation:}
+\[
+d_k = \| v_{i_k} - v_{j_k} \|, \quad k = 1, \dots, N
+\]
+All distances are binned into a histogram of 10 bins.
+
+\textbf{Proof:} Figure~4.2 shows that round and flat shapes have consistent distance peaks, while elongated and irregular ones have broader distributions.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
+
+
+\subsection{D3: Square Root of Triangle Area Formed by 3 Random Vertices}
+\textbf{Purpose:} The D3 descriptor analyses geometric relationships between three vertices by computing the square root of the triangle area they form.
+
+\textbf{Calculation:}
+\begin{align*}
+a &= \| v_2 - v_1 \|, \quad b = \| v_3 - v_2 \|, \quad c = \| v_1 - v_3 \| \\
+s &= \frac{a + b + c}{2} \\
+A_\triangle &= \sqrt{s (s - a) (s - b) (s - c)}
+\end{align*}
+All $\sqrt{A_\triangle}$ values are collected into a histogram.
+
+\textbf{Proof:} Figure~4.3 shows that round shapes have a narrow central peak, while elongated and irregular shapes have broader distributions.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
+
+\subsection{D4: Cube Root of Volume of Tetrahedron Formed by 4 Random Vertices}
+\textbf{Purpose:} The D4 descriptor quantifies volumetric properties of shapes by analysing tetrahedral volumes formed by four random points.
+
+\textbf{Calculation:}
+\begin{align*}
+a &= v_2 - v_1, \quad b = v_3 - v_1, \quad c = v_4 - v_1 \\
+V &= \frac{1}{6} | a \cdot (b \times c) |
+\end{align*}
+To stabilise the feature, the cube root of $V$ is used, and all values are binned into 10 histogram bins.
+
+\textbf{Proof:} Figure~4.4 shows similar curves across shapes, with flatter shapes skewed toward lower volumes as expected.
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/figure4_0.png}
+    \caption{Example of D1 descriptor histograms for the four reference shapes: round (hot air balloon), flat (cellphone), elongated (bottle), and irregular (cow).}
+    \label{fig:d1_histogram}
+\end{figure}
