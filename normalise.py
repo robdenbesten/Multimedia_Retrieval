@@ -169,7 +169,7 @@ class Mesh:
         self.normalize()
         return self
     
-    def save(self, output_dir="remeshed_output", suffix="_rm"):
+    def save(self, output_dir="TEMP_OUTPUT", suffix="_rm"):
         os.makedirs(output_dir, exist_ok=True)
         
         # Use the original file path to construct output name
