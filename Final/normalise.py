@@ -171,9 +171,9 @@ class Mesh:
     def save(self, output_dir="remeshed_output", suffix="_rm"):
         os.makedirs(output_dir, exist_ok=True)
         
-        # Get original filename from the mesh label
-        mesh_label = self.ms.current_mesh().label()
-        base_name = os.path.splitext(mesh_label)[0]
+        # Use the original file path to construct output name
+        original_basename = os.path.basename(self.file_path)
+        base_name = os.path.splitext(original_basename)[0]
         output_filename = base_name + suffix + ".obj"
         output_path = os.path.join(output_dir, output_filename)
         
@@ -185,17 +185,9 @@ class Mesh:
             print(f"Error saving mesh: {e}")
             return None
     
-    def get_vertices(self):
-        return self.ms.current_mesh().vertex_matrix()
-    
-    def get_faces(self):
-        return self.ms.current_mesh().face_matrix()
-    
     def vertex_count(self):
         return self.ms.current_mesh().vertex_number()
     
-    def face_count(self):
-        return self.ms.current_mesh().face_number()
 
 
 if __name__ == "__main__":

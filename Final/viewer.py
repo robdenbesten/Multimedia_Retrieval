@@ -1,7 +1,8 @@
 import sys
 import os
+import shutil
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
-                             QWidget, QLabel, QComboBox, QListWidget)
+                             QWidget, QLabel, QComboBox, QListWidget, QCheckBox)
 from PyQt6.QtCore import Qt
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load, Line
@@ -10,6 +11,7 @@ from vedo import Plotter, load, Line
 from normalise import Mesh
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
+REMESHED_OUTPUT_DIR = 'remeshed_output'
 
 
 class MeshViewer(QMainWindow):
@@ -19,6 +21,7 @@ class MeshViewer(QMainWindow):
         self.current_file = None
         self.normalized_file = None
         self.database_location = DATABASE_LOCATION
+        self.show_normalized = False  # Track toggle state
         self.init_ui()
         
     def init_ui(self):
@@ -56,11 +59,11 @@ class MeshViewer(QMainWindow):
         self.status_label.setWordWrap(True)
         control_layout.addWidget(self.status_label)
         
-        # Normalize button
-        self.normalize_btn = QPushButton('Normalize')
-        self.normalize_btn.clicked.connect(self.normalize_mesh)
-        self.normalize_btn.setEnabled(False)
-        control_layout.addWidget(self.normalize_btn)
+        # Normalize checkbox
+        self.normalize_checkbox = QCheckBox('Show Normalized')
+        self.normalize_checkbox.stateChanged.connect(self.toggle_normalize_view)
+        self.normalize_checkbox.setEnabled(False)
+        control_layout.addWidget(self.normalize_checkbox)
         
         # VTK Widget for 3D rendering with vedo
         self.vtk_widget = QVTKRenderWindowInteractor(central_widget)
@@ -132,7 +135,7 @@ class MeshViewer(QMainWindow):
         self.load_mesh(file_path)
         
     def load_mesh(self, file_path):
-        """Load a mesh file and display it"""
+        """Load a mesh file, normalize it, and display based on toggle state"""
         if file_path:
             try:
                 # Create a new Mesh object
@@ -140,43 +143,50 @@ class MeshViewer(QMainWindow):
                 self.current_file = file_path
                 self.normalized_file = None
                 
-                # Show the mesh
-                self.display_mesh(self.current_file)
-                self.status_label.setText(f'Showing:\n{os.path.basename(file_path)}')
-                self.normalize_btn.setEnabled(True)
+                # Disable checkbox during normalization
+                self.normalize_checkbox.setEnabled(False)
+                self.status_label.setText(f'Loading and normalizing:\n{os.path.basename(file_path)}')
+                QApplication.processEvents()
+                
+                # Always normalize in the background
+                self.mesh_object.full_normalize()
+                self.normalized_file = self.mesh_object.save()
+                
+                # Enable checkbox
+                self.normalize_checkbox.setEnabled(True)
+                
+                # Display based on toggle state
+                if self.show_normalized:
+                    self.display_mesh(self.normalized_file)
+                    self.status_label.setText(f'Normalized [{self.mesh_object.vertex_count()} vertices]:\n{os.path.basename(file_path)}')
+                else:
+                    self.display_mesh(self.current_file)
+                    self.status_label.setText(f'Original:\n{os.path.basename(file_path)}')
                 
             except Exception as e:
                 self.status_label.setText(f'Error loading:\n{e}')
+                self.normalize_checkbox.setEnabled(False)
             
-    def normalize_mesh(self):
-        if self.current_file and self.mesh_object:
-            try:
-                self.status_label.setText('Normalizing...')
-                QApplication.processEvents()
-                
-                # Normalize the mesh using the Mesh class
-                self.mesh_object.full_normalize()
-
-                # Save the normalized mesh
-                self.normalized_file = self.mesh_object.save()
-                
-                if not self.normalized_file:
-                    self.status_label.setText('Error saving mesh')
-                    return
-                
-                # Force the viewer to update
-                QApplication.processEvents()
-                
-                # Show the normalized mesh
+    def toggle_normalize_view(self):
+        """Toggle between showing original and normalized mesh"""
+        if not self.current_file or not self.normalized_file:
+            return
+        
+        self.show_normalized = self.normalize_checkbox.isChecked()
+        
+        try:
+            if self.show_normalized:
+                # Show normalized version
                 self.display_mesh(self.normalized_file)
-                self.status_label.setText(f'Normalized:\n{os.path.basename(self.current_file)} [{self.mesh_object.vertex_count()} vertices]')
-                
-            except Exception as e:
-                print(f"Normalization error: {e}")
-                import traceback
-                traceback.print_exc()
-                self.status_label.setText(f'Error:\n{str(e)[:100]}')
-            
+                self.status_label.setText(f'Normalized [{self.mesh_object.vertex_count()} vertices]:\n{os.path.basename(self.current_file)}')
+            else:
+                # Show original version
+                self.display_mesh(self.current_file)
+                self.status_label.setText(f'Original:\n{os.path.basename(self.current_file)}')
+        except Exception as e:
+            self.status_label.setText(f'Error toggling view:\n{e}')
+
+
     def display_mesh(self, file_path):
         """Display mesh using vedo for better lighting and style"""
         try:
@@ -194,6 +204,27 @@ class MeshViewer(QMainWindow):
             
         except Exception as e:
             self.status_label.setText(f'Error displaying mesh:\n{e}')
+    
+    def closeEvent(self, event):
+        """Clean up remeshed_output folder when closing the viewer"""
+        try:
+            if os.path.exists(REMESHED_OUTPUT_DIR):
+                # Remove all files in the directory
+                for filename in os.listdir(REMESHED_OUTPUT_DIR):
+                    file_path = os.path.join(REMESHED_OUTPUT_DIR, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        print(f'Failed to delete {file_path}. Reason: {e}')
+                print(f'Cleaned up {REMESHED_OUTPUT_DIR} folder')
+        except Exception as e:
+            print(f'Error cleaning up {REMESHED_OUTPUT_DIR}: {e}')
+        finally:
+            # Accept the close event
+            event.accept()
 
 
 def main():
