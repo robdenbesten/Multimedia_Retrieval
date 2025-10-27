@@ -310,11 +310,11 @@ def extract_features_for_single_mesh(
 
 
 def extract_features_for_all_meshes(
-        base_dir: str = 'ShapeDatabase_INFOMR-master/normalized_5000',
+        base_dir: str = 'ShapeDatabase_INFOMR-master/Normalised-objects',
         features_dir: str = 'ShapeDatabase_INFOMR-master',
         n_samples: int = 250000,
         bins_dict: Dict[str, int] = None,
-        surface_points: int = 20000,
+        surface_points: int = 5000,
         max_workers: int = max(1, os.cpu_count() or 1)
 ) -> None:
     if bins_dict is None:
