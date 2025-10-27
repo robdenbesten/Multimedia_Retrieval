@@ -3,12 +3,17 @@ import math
 import hashlib
 from typing import Dict, List, Tuple
 import csv
+import json
 
 import numpy as np
+import pandas as pd
 import trimesh
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from unicodedata import category
+# --- (existing code from line 11 to 328) ---
+# This includes RANGES, DEFAULT_BINS, repair_mesh, sampling functions,
+# descriptor functions, convex hull metrics, and histogram helpers.
+# The following changes start from extract_features_for_single_mesh.
 
 # -----------------------------
 # Fixed descriptor ranges (unit AABB-diagonal scaling)
@@ -252,13 +257,11 @@ def l1_normalized_histogram(x: np.ndarray, edges: np.ndarray) -> np.ndarray:
 def extract_features_for_single_mesh(
         obj_path: str,
         rel_path: str,
-        out_path: str,
         edges: Dict[str, np.ndarray],
         n_samples: int,
         surface_points: int
 ) -> Tuple[str, bool, object]:
     try:
-        # Split relative path into category and object name
         if '/' in rel_path:
             category, obj_name = rel_path.split('/', 1)
         else:
@@ -275,6 +278,8 @@ def extract_features_for_single_mesh(
         d3 = descriptor_d3_sqrt_triangle_area(points, n_samples, rng)
         d4 = descriptor_d4_cuberoot_tetra_volume(points, n_samples, rng)
 
+        # Note: l1_normalized_histogram is used here for raw histograms,
+        # but the final normalization will happen dataset-wide.
         d1_hist = l1_normalized_histogram(d1, edges['D1'])
         d2_hist = l1_normalized_histogram(d2, edges['D2'])
         a3_hist = l1_normalized_histogram(a3, edges['A3'])
@@ -284,22 +289,14 @@ def extract_features_for_single_mesh(
         metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
                        "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
 
-        # Start row with object name and category
         row: List[object] = [obj_name, category]
-
         for k in metric_keys:
             v = metrics.get(k)
-            try:
-                row.append(float(v))
-            except (ValueError, TypeError):
-                row.append(float('nan'))
+            row.append(float(v) if v is not None and np.isfinite(v) else 0.0)
 
-        ext = metrics.get('extents', np.array([float('nan')] * 3))
+        ext = metrics.get('extents', np.array([0.0] * 3))
         for i in range(3):
-            try:
-                row.append(float(ext[i]))
-            except (ValueError, TypeError, IndexError):
-                row.append(float('nan'))
+            row.append(float(ext[i]) if np.isfinite(ext[i]) else 0.0)
 
         for arr in (d1_hist, d2_hist, a3_hist, d3_hist, d4_hist):
             row.extend([float(x) for x in np.asarray(arr, dtype=float).tolist()])
@@ -321,60 +318,90 @@ def extract_features_for_all_meshes(
         bins_dict = DEFAULT_BINS.copy()
     edges = make_fixed_bin_edges(bins_dict)
 
-    tasks: List[Tuple[str, str, str]] = []
+    tasks = []
     for root, _, files in os.walk(base_dir):
         for file in files:
             if file.lower().endswith('.obj'):
                 obj_path = os.path.join(root, file)
-                rel_path = os.path.relpath(obj_path, base_dir).replace('\\', '/')  # Normalize path separators
-                out_path = os.path.join(features_dir, os.path.splitext(rel_path)[0] + '.csv')
-                tasks.append((obj_path, rel_path, out_path))
+                rel_path = os.path.relpath(obj_path, base_dir).replace('\\', '/')
+                tasks.append((obj_path, rel_path))
 
     if not tasks:
         print('No .obj files found.')
         return
 
-    # Add 'Relative Path' as the first column in the header
     metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
                    "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
-    header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]
-
     hist_order = ['D1', 'D2', 'A3', 'D3', 'D4']
+    header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]
     for k in hist_order:
         n_bins = len(edges[k]) - 1
         header += [f'{k}_bin_{i}' for i in range(n_bins)]
 
     os.makedirs(features_dir, exist_ok=True)
     out_csv = os.path.join(features_dir, 'all_features.csv')
+    stats_json = os.path.join(features_dir, 'normalization_stats.json')
 
     work_total = len(tasks)
     print(f'Processing {work_total} meshes with {max_workers} workers...')
-    print(f'Settings: surface_points={surface_points}, n_samples={n_samples}, bins={list(bins_dict.values())[0]}')
+    results = []
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        futs = [ex.submit(extract_features_for_single_mesh, obj, rel, edges, n_samples, surface_points) for (obj, rel) in tasks]
+        for i, fut in enumerate(as_completed(futs)):
+            obj_path, ok, payload = fut.result()
+            if ok:
+                results.append(payload)
+            print(f'[{i + 1}/{work_total}] {"OK" if ok else "FAIL"}: {os.path.basename(obj_path)}')
 
-    done = 0
-    with open(out_csv, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
+    if not results:
+        print("No features were successfully extracted.")
+        return
 
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            futs = [ex.submit(extract_features_for_single_mesh, obj, rel, outp, edges, n_samples, surface_points) for
-                    (obj, rel, outp) in tasks]
-            for fut in as_completed(futs):
-                obj_path, ok, payload = fut.result()
-                done += 1
-                if ok and isinstance(payload, list):
-                    writer.writerow(payload)
-                    print(f'[{done}/{work_total}] Saved features for {os.path.basename(obj_path)}')
-                else:
-                    print(f'[{done}/{work_total}] FAILED for {os.path.basename(obj_path)}: {payload}')
+    # Create DataFrame from raw results
+    df = pd.DataFrame(results, columns=header).fillna(0.0)
+    df.iloc[:, 2:] = df.iloc[:, 2:].apply(pd.to_numeric, errors='coerce').fillna(0.0)
+
+    # --- Normalize the dataset and save stats ---
+    print("Normalizing feature dataset...")
+    raw_numeric_df = df.iloc[:, 2:]
+    norm_df = raw_numeric_df.copy()
+    stats = {'means': {}, 'stds': {}}
+
+    # Normalize Histograms (already L1 normalized, just ensure sums are 1)
+    start_col = len(metric_keys) + 3
+    for i in range(len(hist_order)):
+        sl = slice(start_col + i * DEFAULT_BINS['D1'], start_col + (i + 1) * DEFAULT_BINS['D1'])
+        hists = norm_df.iloc[:, sl].values
+        sums = hists.sum(axis=1, keepdims=True)
+        norm_df.iloc[:, sl] = np.divide(hists, sums, where=sums != 0)
+
+    # Standardize Scalars and save stats
+    scalar_cols = metric_keys + ["extents_0", "extents_1", "extents_2"]
+    for col_name in scalar_cols:
+        mean = raw_numeric_df[col_name].mean()
+        std = raw_numeric_df[col_name].std()
+        stats['means'][col_name] = mean
+        stats['stds'][col_name] = std
+        if std > 0:
+            norm_df[col_name] = (raw_numeric_df[col_name] - mean) / std
+        else:
+            norm_df[col_name] = 0.0
+
+    # Save normalization stats
+    with open(stats_json, 'w') as f:
+        json.dump(stats, f, indent=4)
+    print(f"Saved normalization stats to {stats_json}")
+
+    # Combine labels with normalized numeric data and save
+    final_df = pd.concat([df.iloc[:, :2], norm_df], axis=1)
+    final_df.to_csv(out_csv, index=False)
+    print(f"Saved {len(final_df)} normalized feature vectors to {out_csv}")
 
 
 if __name__ == '__main__':
-    # Windows-safe entry point
     extract_features_for_all_meshes(
         base_dir='Normalised-objects',
         features_dir='Feature-matrix',
-        # Higher quality sampling settings
         n_samples=250000,
         surface_points=5000,
         bins_dict=DEFAULT_BINS,
