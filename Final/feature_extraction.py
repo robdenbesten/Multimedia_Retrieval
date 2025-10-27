@@ -3,9 +3,11 @@ import math
 import hashlib
 from typing import Dict, List, Tuple
 import csv
+
 import numpy as np
 import trimesh
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from unicodedata import category
 
 # -----------------------------
@@ -370,8 +372,8 @@ def extract_features_for_all_meshes(
 if __name__ == '__main__':
     # Windows-safe entry point
     extract_features_for_all_meshes(
-        base_dir='ShapeDatabase_INFOMR-master/normalized_5000',
-        features_dir='ShapeDatabase_INFOMR-master',
+        base_dir='Normalised-objects',
+        features_dir='Normalised-objects',
         # Higher quality sampling settings
         n_samples=250000,
         surface_points=5000,
