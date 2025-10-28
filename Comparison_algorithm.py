@@ -2,6 +2,8 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Callable, List, Dict
+from sklearn.manifold import TSNE
+from sklearn.neighbors import NearestNeighbors
 
 # -----------------------------
 # Feature & Distance Constants
@@ -138,14 +140,19 @@ def _emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
 
 DISTANCE_FUNCTIONS: Dict[str, Callable] = {
     'euclidean': _l2,
-    'chi-squared': _chi_squared_hist,
+    #'chi-squared': _chi_squared_hist,
     'manhattan': _l1,
-    'cosine': _cosine_dist,
-    'kullback-leibler': _kl_sym_hist,
-    'emd': _emd_1d_hist,
+    #'cosine': _cosine_dist,
+    #'kullback-leibler': _kl_sym_hist,
+    #'emd': _emd_1d_hist,
 }
 HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd'}
 
+COMPOSITE_METRICS: Dict[str, Dict[str, Callable]] = {
+    'manhattan+chi-squared': {'scalar_fn': _l1, 'hist_fn': _chi_squared_hist},
+    'manhattan+emd': {'scalar_fn': _l1, 'hist_fn': _emd_1d_hist},
+    'manhattan+kullback-leibler': {'scalar_fn': _l1, 'hist_fn': _kl_sym_hist},
+}
 
 def _normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[str, float]:
     """Normalizes a weight dictionary to sum to 1."""
@@ -178,7 +185,7 @@ class ShapeSearcher:
 
         self.weights = weights
         self.weighting_method = weighting_method
-        self.metrics = list(DISTANCE_FUNCTIONS.keys())
+        self.metrics = list(DISTANCE_FUNCTIONS.keys()) + list(COMPOSITE_METRICS.keys()) + ['tsne-knn']
         self.dist_stats: Dict[str, Dict[str, tuple]] = {}
 
         raw_features, self.labels = _load_dataset(feature_csv_path)
@@ -194,6 +201,23 @@ class ShapeSearcher:
 
         if self.weighting_method == 'distance':
             self._precompute_distance_stats()
+
+        # --- t-SNE and k-NN pre-computation ---
+        self.tsne_embedding = None
+        self.knn_model = None
+        self._setup_tsne_knn()
+
+    def _setup_tsne_knn(self, n_neighbors=11):
+        """Computes t-SNE embedding and builds a k-NN model on it."""
+        print("Computing t-SNE embedding for k-NN search... (this may take a moment)")
+        tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
+        self.tsne_embedding = tsne.fit_transform(self.features)
+        print("t-SNE completed.")
+
+        print("Building k-NN model on t-SNE embedding...")
+        self.knn_model = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree')
+        self.knn_model.fit(self.tsne_embedding)
+        print("k-NN model built.")
 
     def get_available_labels(self) -> List[str]:
         """Returns a list of all available model labels."""
@@ -213,14 +237,22 @@ class ShapeSearcher:
         """
         if query_label not in self.labels:
             raise ValueError(f"Query label '{query_label}' not found in dataset.")
-        if metric not in DISTANCE_FUNCTIONS:
+        if metric not in self.metrics:
             raise ValueError(f"Unknown metric: {metric}")
 
         query_idx = self.labels.index(query_label)
+
+        if metric == 'tsne-knn':
+            return self._search_knn(query_idx, top_n)
+
         query_vec = self.features[query_idx]
+        if metric in COMPOSITE_METRICS:
+            dist_computer = self._compute_composite_distance
+        else:
+            dist_computer = self._compute_distance
 
         dists = np.array([
-            self._compute_distance(query_vec, vec, metric) for vec in self.features
+            dist_computer(query_vec, vec, metric) for vec in self.features
         ], dtype=float)
 
         # Get indices of sorted distances, excluding the query item itself
@@ -228,6 +260,43 @@ class ShapeSearcher:
         results = [self.labels[i] for i in sorted_indices if i != query_idx]
 
         return results[:top_n]
+
+    def _search_knn(self, query_index: int, top_n: int) -> List[str]:
+        """Performs a k-NN search on the pre-computed t-SNE embedding."""
+        if self.knn_model is None or self.tsne_embedding is None:
+            raise RuntimeError("k-NN model is not available.")
+
+        query_vec_2d = self.tsne_embedding[query_index].reshape(1, -1)
+        # Query for top_n + 1 to account for the query item itself
+        distances, indices = self.knn_model.kneighbors(query_vec_2d, n_neighbors=top_n + 1)
+
+        # Exclude the first result (which is the query item itself)
+        neighbor_indices = indices.flatten()[1:]
+
+        return [self.labels[i] for i in neighbor_indices]
+
+    def _compute_composite_distance(self, vec_a: np.ndarray, vec_b: np.ndarray, metric: str) -> float:
+        """Computes a weighted distance using different functions for scalars and histograms."""
+        metric_fns = COMPOSITE_METRICS[metric]
+        scalar_fn = metric_fns['scalar_fn']
+        hist_fn = metric_fns['hist_fn']
+        sub_weights = _normalize_weights(self.weights, FEATURE_GROUP_ORDER)
+
+        total_dist = 0.0
+
+        # Calculate distance for histogram groups
+        for group in HIST_KEYS:
+            sl = GROUP_SLICES[group]
+            raw_dist = hist_fn(vec_a[sl], vec_b[sl])
+            total_dist += sub_weights[group] * raw_dist
+
+        # Calculate distance for scalar groups
+        for group in SCALAR_KEYS:
+            sl = GROUP_SLICES[group]
+            raw_dist = scalar_fn(vec_a[sl], vec_b[sl])
+            total_dist += sub_weights[group] * raw_dist
+
+        return float(total_dist)
 
     def _compute_distance(self, vec_a: np.ndarray, vec_b: np.ndarray, metric: str) -> float:
         """Computes the final weighted distance between two feature vectors."""

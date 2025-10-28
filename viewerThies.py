@@ -5,7 +5,7 @@ import csv
 import pandas as pd
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
                              QWidget, QLabel, QComboBox, QListWidget, QCheckBox, QGridLayout)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QCoreApplication
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load, Line, Axes
 
@@ -78,6 +78,12 @@ class MeshViewer(QMainWindow):
         self.status_label = QLabel('Select a category and object')
         self.status_label.setWordWrap(True)
         control_layout.addWidget(self.status_label)
+
+        # Prepare button
+        self.prepare_button = QPushButton('Prepare Mesh (Normalize)')
+        self.prepare_button.clicked.connect(self.prepare_mesh)
+        self.prepare_button.setEnabled(False)
+        control_layout.addWidget(self.prepare_button)
 
         # Normalize checkbox
         self.normalize_checkbox = QCheckBox('Show Normalized')
@@ -170,37 +176,50 @@ class MeshViewer(QMainWindow):
         self.load_mesh(file_path)
 
     def load_mesh(self, file_path):
-        """Load a mesh file, normalize it, and display."""
-        if not file_path:
+        """Load a mesh file and display it without calculations."""
+        if not file_path or not os.path.exists(file_path):
+            self.status_label.setText(f'File not found:\n{file_path}')
             return
         try:
-            self.mesh_object = Mesh(file_path)
             self.current_file = file_path
+            self.mesh_object = Mesh(file_path)
             self.normalized_file = None
+            self.show_normalized = False
 
+            # Reset UI state
+            self.normalize_checkbox.setChecked(False)
             self.normalize_checkbox.setEnabled(False)
+            self.prepare_button.setEnabled(True)
+            if self.searcher:
+                self.search_button.setEnabled(True)
+
+            # Display the original mesh
+            self.display_mesh(self.current_file)
+            self.update_status_label()
+
+        except Exception as e:
+            self.status_label.setText(f'Error loading:\n{e}')
+            self.prepare_button.setEnabled(False)
             self.search_button.setEnabled(False)
-            self.status_label.setText(f'Loading and normalizing...\n{os.path.basename(file_path)}')
+
+    def prepare_mesh(self):
+        """Normalize the currently loaded mesh."""
+        if not self.mesh_object:
+            self.status_label.setText("No mesh loaded to prepare.")
+            return
+        try:
+            self.status_label.setText(f'Normalizing...\n{os.path.basename(self.current_file)}')
             QApplication.processEvents()
 
             self.mesh_object.full_normalize()
             self.normalized_file = self.mesh_object.save()
 
-            self.status_label.setText(f'Extracting features...\n{os.path.basename(file_path)}')
-            QApplication.processEvents()
-            self.extract_features()
-
             self.normalize_checkbox.setEnabled(True)
-            if self.searcher:
-                self.search_button.setEnabled(True)
-
-            self.display_mesh(self.normalized_file if self.show_normalized else self.current_file)
-            self.update_status_label()
+            self.status_label.setText(f'Normalization complete for\n{os.path.basename(self.current_file)}')
 
         except Exception as e:
-            self.status_label.setText(f'Error loading:\n{e}')
+            self.status_label.setText(f'Error during normalization:\n{e}')
             self.normalize_checkbox.setEnabled(False)
-            self.search_button.setEnabled(False)
 
     def toggle_normalize_view(self):
         """Toggle between showing original and normalized mesh"""
@@ -208,7 +227,11 @@ class MeshViewer(QMainWindow):
             return
         self.show_normalized = self.normalize_checkbox.isChecked()
         try:
-            self.display_mesh(self.normalized_file if self.show_normalized else self.current_file)
+            # Only show normalized view if the file has been prepared
+            if self.show_normalized and self.normalized_file:
+                self.display_mesh(self.normalized_file)
+            else:
+                self.display_mesh(self.current_file)
             self.update_status_label()
         except Exception as e:
             self.status_label.setText(f'Error toggling view:\n{e}')
@@ -216,7 +239,7 @@ class MeshViewer(QMainWindow):
     def update_status_label(self):
         """Updates the status label based on the current view."""
         if not self.current_file: return
-        state = 'Normalized' if self.show_normalized else 'Original'
+        state = 'Normalized' if self.show_normalized and self.normalized_file else 'Original'
         v_count = self.mesh_object.vertex_count() if self.mesh_object else 'N/A'
         self.status_label.setText(f'{state} [{v_count} vertices]:\n{os.path.basename(self.current_file)}')
 
@@ -263,28 +286,6 @@ class MeshViewer(QMainWindow):
             plot.show(mesh, resetcam=True)
         except Exception as e:
             print(f"Error displaying result mesh {file_path}: {e}")
-
-    def extract_features(self):
-        """Extract features from the normalized mesh and save to CSV"""
-        if not self.normalized_file or not os.path.exists(self.normalized_file):
-            return
-        try:
-            category = self.category_dropdown.currentText()
-            obj_name = os.path.basename(self.current_file)
-            rel_path = f"{category}/{obj_name}"
-            feature_filename = os.path.splitext(os.path.basename(self.normalized_file))[0] + '_features.csv'
-            out_path = os.path.join(TEMP_OUTPUT_DIR, feature_filename)
-
-            _, success, result = extract_features_for_single_mesh(
-                obj_path=self.normalized_file, rel_path=rel_path, out_path=out_path,
-                edges=self.edges, n_samples=250000, surface_points=5000
-            )
-            if success:
-                print(f"Features saved to: {out_path}")
-            else:
-                print(f"Feature extraction failed: {result}")
-        except Exception as e:
-            print(f"Error in extract_features: {e}")
 
     def display_mesh(self, file_path):
         """Display mesh in the main viewer."""
