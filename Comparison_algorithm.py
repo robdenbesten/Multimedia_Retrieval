@@ -80,7 +80,7 @@ def _normalize_features(features: np.ndarray) -> np.ndarray:
     return norm_features
 
 
-def _normalize_single_feature_vector(features: np.ndarray) -> np.ndarray:
+def _normalize_single_feature_vector(self, features: np.ndarray) -> np.ndarray:
     """Normalizes a single feature vector (1D array)."""
     norm_features = features.copy()
     # Normalize Histograms by sum
@@ -90,6 +90,10 @@ def _normalize_single_feature_vector(features: np.ndarray) -> np.ndarray:
         hist_sum = np.sum(hist_slice)
         if hist_sum > 0:
             norm_features[sl] = hist_slice / hist_sum
+    # Standardize Scalars
+    for key in SCALAR_KEYS:
+        sl = GROUP_SLICES[key]
+        norm_features[sl] = (norm_features[sl] - self.scalar_means[key]) / self.scalar_stds[key] if self.scalar_stds[key] > 0 else 0.0
     return norm_features
 # -----------------------------
 # Distance Functions
@@ -179,6 +183,14 @@ class ShapeSearcher:
 
         raw_features, self.labels = _load_dataset(feature_csv_path)
         self.features = _normalize_features(raw_features)
+
+        self.scalar_means = {}
+        self.scalar_stds = {}
+        for key in SCALAR_KEYS:
+            sl = GROUP_SLICES[key]
+            scalar_column = raw_features[:, sl].flatten()
+            self.scalar_means[key] = np.mean(scalar_column)
+            self.scalar_stds[key] = np.std(scalar_column)
 
         if self.weighting_method == 'distance':
             self._precompute_distance_stats()
