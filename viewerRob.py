@@ -14,7 +14,7 @@ from normalise import Mesh
 from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 # Import the comparison algorithm components
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS, WEIGHTING_METHOD
+from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
@@ -44,7 +44,7 @@ class MeshViewer(QMainWindow):
             self.searcher = ShapeSearcher(
                 feature_csv_path=FEATURE_CSV,
                 weights=MANUAL_WEIGHTS,
-                weighting_method=WEIGHTING_METHOD
+                weighting_method='feature'  # Use default weighting method
             )
         except Exception as e:
             print(f"Failed to initialize searcher: {e}")
