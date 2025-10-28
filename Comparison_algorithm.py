@@ -17,10 +17,6 @@ EPS = 1e-10
 # -----------------------------
 # Default Configuration
 # -----------------------------
-# 'feature': Weights feature groups before distance calculation.
-# 'distance': Standardizes per-group distances before applying weights.
-WEIGHTING_METHOD = 'feature'
-
 # Adjust feature weights here. They are normalized to sum to 1.
 MANUAL_WEIGHTS = {
     'A3': 2.0, 'D1': 1.0, 'D2': 2.0, 'D3': 2.0, 'D4': 2.0,
@@ -82,21 +78,6 @@ def _normalize_features(features: np.ndarray) -> np.ndarray:
     return norm_features
 
 
-def _normalize_single_feature_vector(self, features: np.ndarray) -> np.ndarray:
-    """Normalizes a single feature vector (1D array)."""
-    norm_features = features.copy()
-    # Normalize Histograms by sum
-    for key in HIST_KEYS:
-        sl = GROUP_SLICES[key]
-        hist_slice = norm_features[sl]
-        hist_sum = np.sum(hist_slice)
-        if hist_sum > 0:
-            norm_features[sl] = hist_slice / hist_sum
-    # Standardize Scalars
-    for key in SCALAR_KEYS:
-        sl = GROUP_SLICES[key]
-        norm_features[sl] = (norm_features[sl] - self.scalar_means[key]) / self.scalar_stds[key] if self.scalar_stds[key] > 0 else 0.0
-    return norm_features
 # -----------------------------
 # Distance Functions
 # -----------------------------
@@ -140,11 +121,7 @@ def _emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
 
 DISTANCE_FUNCTIONS: Dict[str, Callable] = {
     'euclidean': _l2,
-    #'chi-squared': _chi_squared_hist,
     'manhattan': _l1,
-    #'cosine': _cosine_dist,
-    #'kullback-leibler': _kl_sym_hist,
-    #'emd': _emd_1d_hist,
 }
 HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd'}
 
@@ -169,38 +146,23 @@ def _normalize_weights(weights: Dict[str, float], allowed: List[str]) -> Dict[st
 class ShapeSearcher:
     """
     Manages loading, processing, and searching for 3D shapes based on feature vectors.
+    Always uses feature-based weighting (no 'distance' weighting).
     """
 
     def __init__(self, feature_csv_path: str, weights: Dict[str, float], weighting_method: str = 'feature'):
         """
         Initializes the searcher by loading and normalizing features from a CSV file.
 
-        Args:
-            feature_csv_path (str): Path to the feature CSV file.
-            weights (Dict[str, float]): Weights for each feature group.
-            weighting_method (str): Method for weighting ('feature' or 'distance').
+        Note: the \`weighting_method\` parameter is accepted for compatibility but ignored.
+        Feature weighting is always used.
         """
         if not os.path.exists(feature_csv_path):
             raise FileNotFoundError(f"Feature CSV file not found at '{feature_csv_path}'")
 
         self.weights = weights
-        self.weighting_method = weighting_method
         self.metrics = list(DISTANCE_FUNCTIONS.keys()) + list(COMPOSITE_METRICS.keys()) + ['tsne-knn']
-        self.dist_stats: Dict[str, Dict[str, tuple]] = {}
-
         raw_features, self.labels = _load_dataset(feature_csv_path)
         self.features = _normalize_features(raw_features)
-
-        self.scalar_means = {}
-        self.scalar_stds = {}
-        for key in SCALAR_KEYS:
-            sl = GROUP_SLICES[key]
-            scalar_column = raw_features[:, sl].flatten()
-            self.scalar_means[key] = np.mean(scalar_column)
-            self.scalar_stds[key] = np.std(scalar_column)
-
-        if self.weighting_method == 'distance':
-            self._precompute_distance_stats()
 
         # --- t-SNE and k-NN pre-computation ---
         self.tsne_embedding = None
@@ -227,13 +189,10 @@ class ShapeSearcher:
         """
         Finds the most similar shapes to a given query shape.
 
-        Args:
-            query_label (str): The label of the query shape (e.g., 'Category/model.obj').
-            metric (str): The distance metric to use (e.g., 'euclidean').
-            top_n (int): The number of top results to return.
-
-        Returns:
-            List[str]: A list of labels for the most similar shapes.
+        Uses:
+        - 'tsne-knn' -> k-NN search on t-SNE embedding.
+        - composite metrics -> combined hist/scalar functions.
+        - simple metrics -> single distance applied per feature group with feature weighting.
         """
         if query_label not in self.labels:
             raise ValueError(f"Query label '{query_label}' not found in dataset.")
@@ -251,9 +210,7 @@ class ShapeSearcher:
         else:
             dist_computer = self._compute_distance
 
-        dists = np.array([
-            dist_computer(query_vec, vec, metric) for vec in self.features
-        ], dtype=float)
+        dists = np.array([dist_computer(query_vec, vec, metric) for vec in self.features], dtype=float)
 
         # Get indices of sorted distances, excluding the query item itself
         sorted_indices = np.argsort(dists)
@@ -299,7 +256,7 @@ class ShapeSearcher:
         return float(total_dist)
 
     def _compute_distance(self, vec_a: np.ndarray, vec_b: np.ndarray, metric: str) -> float:
-        """Computes the final weighted distance between two feature vectors."""
+        """Computes the final weighted distance between two feature vectors using feature weighting only."""
         dist_fn = DISTANCE_FUNCTIONS[metric]
         groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
         sub_weights = _normalize_weights(self.weights, groups)
@@ -308,32 +265,7 @@ class ShapeSearcher:
         for group in groups:
             sl = GROUP_SLICES[group]
             raw_dist = dist_fn(vec_a[sl], vec_b[sl])
-
-            if self.weighting_method == 'distance':
-                mean, std = self.dist_stats.get(metric, {}).get(group, (0.0, 1.0))
-                norm_dist = (raw_dist - mean) / std if std > 0 else 0.0
-                total_dist += sub_weights[group] * norm_dist
-            else:  # 'feature' weighting
-                total_dist += sub_weights[group] * raw_dist
+            # Always apply feature weighting directly
+            total_dist += sub_weights[group] * raw_dist
 
         return float(total_dist)
-
-    def _precompute_distance_stats(self, num_samples: int = 500):
-        """Calculates mean/std of distances for the 'distance' weighting method."""
-        num_shapes = self.features.shape[0]
-        rng = np.random.default_rng(42)
-        indices = rng.choice(num_shapes, size=min(num_samples, num_shapes), replace=False)
-        sampled_features = self.features[indices]
-
-        for metric, dist_fn in DISTANCE_FUNCTIONS.items():
-            self.dist_stats[metric] = {}
-            groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
-            for g in groups:
-                sl = GROUP_SLICES[g]
-                group_vectors = sampled_features[:, sl]
-                dists = [
-                    dist_fn(group_vectors[i], group_vectors[j])
-                    for i in range(len(group_vectors)) for j in range(i + 1, len(group_vectors))
-                ]
-                if dists:
-                    self.dist_stats[metric][g] = (np.mean(dists), np.std(dists))

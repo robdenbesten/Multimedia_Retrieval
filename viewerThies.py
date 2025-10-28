@@ -1,3 +1,4 @@
+# python
 import sys
 import os
 import shutil
@@ -14,7 +15,7 @@ from normalise import Mesh
 from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 # Import the comparison algorithm components
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS, WEIGHTING_METHOD
+from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
 
 DATABASE_LOCATION = r'Normalised-objects'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
@@ -40,10 +41,10 @@ class MeshViewer(QMainWindow):
     def init_searcher(self):
         """Initializes the ShapeSearcher."""
         try:
+            # No weighting_method passed anymore; ShapeSearcher uses feature weighting only.
             self.searcher = ShapeSearcher(
                 feature_csv_path=FEATURE_CSV,
-                weights=MANUAL_WEIGHTS,
-                weighting_method=WEIGHTING_METHOD
+                weights=MANUAL_WEIGHTS
             )
         except Exception as e:
             print(f"Failed to initialize searcher: {e}")
@@ -130,7 +131,7 @@ class MeshViewer(QMainWindow):
         self.load_categories()
 
         if not self.searcher:
-            self.status_label.setText(f"Error: Could not find '{FEATURE_CSV}'.\nSearch is disabled.")
+            self.status_label.setText(f"Error: Could not find `{FEATURE_CSV}`.\nSearch is disabled.")
             self.metric_dropdown.setEnabled(False)
             self.search_button.setEnabled(False)
 
