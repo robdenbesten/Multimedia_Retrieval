@@ -205,3 +205,5 @@ class ShapeSearcher:
                 ]
                 if dists:
                     self.dist_stats[metric][g] = (np.mean(dists), np.std(dists))
+
+#heatmap van elke categorie maken, curf maken en ook dus percentagen en combineren van de scalars en dan daarna de histo hybride dingen maken
