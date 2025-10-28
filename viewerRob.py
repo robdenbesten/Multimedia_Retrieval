@@ -193,7 +193,7 @@ class MeshViewer(QMainWindow):
         self.load_mesh(file_path)
         
     def load_mesh(self, file_path):
-        """Load a mesh file, normalize it, and display based on toggle state"""
+        """Load a mesh file, normalize it, and display progressively during each step"""
         if file_path:
             try:
                 # Create a new Mesh object
@@ -201,27 +201,40 @@ class MeshViewer(QMainWindow):
                 self.current_file = file_path
                 self.normalized_file = None
                 
-                # Disable checkbox during normalization
+                # Disable checkbox and search during processing
                 self.normalize_checkbox.setEnabled(False)
-                self.status_label.setText(f'Loading and normalizing:\n{os.path.basename(file_path)}')
+                self.search_button.setEnabled(False)
+                
+                # Step 1: Display original file immediately if that's what we want to show
+                self.status_label.setText(f'Loaded original file:\n{os.path.basename(file_path)}')
+                if not self.show_normalized:
+                    self.display_mesh(self.current_file)
+                    self.update_status_label()
                 QApplication.processEvents()
                 
-                # Always normalize in the background
+                # Step 2: Perform normalization
+                self.status_label.setText(f'Normalizing and remeshing:\n{os.path.basename(file_path)}')
+                QApplication.processEvents()
                 self.mesh_object.full_normalize()
                 self.normalized_file = self.mesh_object.save()
                 
-                # Extract features from normalized mesh
+                # Step 3: Display normalized file immediately if that's what we want to show
+                if self.show_normalized:
+                    self.display_mesh(self.normalized_file)
+                    self.update_status_label()
+                QApplication.processEvents()
+                
+                # Step 4: Extract features (this doesn't affect display)
                 self.status_label.setText(f'Extracting features:\n{os.path.basename(file_path)}')
                 QApplication.processEvents()
                 self.extract_features()
                 
-                # Enable checkbox and search button
+                # Step 5: Enable controls and finalize
                 self.normalize_checkbox.setEnabled(True)
                 if self.searcher:
                     self.search_button.setEnabled(True)
                 
-                # Display based on toggle state
-                self.display_mesh(self.normalized_file if self.show_normalized else self.current_file)
+                # Final status update
                 self.update_status_label()
                 
             except Exception as e:
@@ -245,8 +258,21 @@ class MeshViewer(QMainWindow):
     def update_status_label(self):
         """Updates the status label based on the current view."""
         if not self.current_file: return
-        state = 'Normalized' if self.show_normalized else 'Original'
-        v_count = self.mesh_object.vertex_count() if self.mesh_object else 'N/A'
+        
+        if self.show_normalized:
+            state = 'Normalized'
+            # For normalized view, use the mesh_object vertex count (which is the normalized count)
+            v_count = self.mesh_object.vertex_count() if self.mesh_object else 'N/A'
+        else:
+            state = 'Original'
+            # For original view, load the original file to get its vertex count
+            try:
+                import trimesh
+                original_mesh = trimesh.load(self.current_file)
+                v_count = len(original_mesh.vertices)
+            except:
+                v_count = 'N/A'
+        
         self.status_label.setText(f'{state} ({v_count} vertices):\n{os.path.basename(self.current_file)}')
 
     def find_similar_shapes(self):
