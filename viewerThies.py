@@ -17,9 +17,9 @@ from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_
 # Import the comparison algorithm components
 from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
 
-DATABASE_LOCATION = r'Normalised-objects'
+DATABASE_LOCATION = 'ShapeDatabase_INFOMR-master/Original Database'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
-FEATURE_CSV = 'Feature-matrix/all_features.csv'  # Path to your main feature database
+FEATURE_CSV = 'Feature-matrix/all_features_original.csv'  # Path to your main feature database
 
 
 class MeshViewer(QMainWindow):

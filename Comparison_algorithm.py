@@ -2,7 +2,6 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Callable, List, Dict
-from sklearn.manifold import TSNE
 from sklearn.neighbors import NearestNeighbors
 
 # -----------------------------
@@ -19,11 +18,16 @@ EPS = 1e-10
 # -----------------------------
 # Adjust feature weights here. They are normalized to sum to 1.
 MANUAL_WEIGHTS = {
-    'A3': 2.0, 'D1': 1.0, 'D2': 2.0, 'D3': 2.0, 'D4': 2.0,
+    'A3': 1.0, 'D1': 1.0, 'D2': 1.0, 'D3': 1.0, 'D4': 1.0,
     'Surface area': 1.0, 'Sphericity': 1.0, 'Rectangularity': 1.0,
     'Diameter': 1.0, 'Convexity': 1.0, 'Eccentricity': 1.0,
 }
 
+#MANUAL_WEIGHTS_ADJUSTED = {
+#    'A3': 2.0, 'D1': 1.0, 'D2': 2.0, 'D3': 2.0, 'D4': 2.0,
+#    'Surface area': 1.0, 'Sphericity': 1.0, 'Rectangularity': 1.0,
+#    'Diameter': 1.0, 'Convexity': 0.5, 'Eccentricity': 1.0,
+#}
 
 # -----------------------------
 # Helper Functions
@@ -122,6 +126,7 @@ def _emd_1d_hist(a: np.ndarray, b: np.ndarray) -> float:
 DISTANCE_FUNCTIONS: Dict[str, Callable] = {
     'euclidean': _l2,
     'manhattan': _l1,
+    'cosine': _cosine_dist,
 }
 HIST_ONLY_METRICS = {'chi-squared', 'kullback-leibler', 'emd'}
 
@@ -153,32 +158,27 @@ class ShapeSearcher:
         """
         Initializes the searcher by loading and normalizing features from a CSV file.
 
-        Note: the \`weighting_method\` parameter is accepted for compatibility but ignored.
+        Note: the `weighting_method` parameter is accepted for compatibility but ignored.
         Feature weighting is always used.
         """
         if not os.path.exists(feature_csv_path):
             raise FileNotFoundError(f"Feature CSV file not found at '{feature_csv_path}'")
 
         self.weights = weights
-        self.metrics = list(DISTANCE_FUNCTIONS.keys()) + list(COMPOSITE_METRICS.keys()) + ['tsne-knn']
+        self.metrics = list(DISTANCE_FUNCTIONS.keys()) + list(COMPOSITE_METRICS.keys()) + ['knn']
         raw_features, self.labels = _load_dataset(feature_csv_path)
         self.features = _normalize_features(raw_features)
 
-        # --- t-SNE and k-NN pre-computation ---
-        self.tsne_embedding = None
+        # --- k-NN pre-computation ---
         self.knn_model = None
-        self._setup_tsne_knn()
+        self._setup_knn()
 
-    def _setup_tsne_knn(self, n_neighbors=11):
-        """Computes t-SNE embedding and builds a k-NN model on it."""
-        print("Computing t-SNE embedding for k-NN search... (this may take a moment)")
-        tsne = TSNE(n_components=2, perplexity=30, max_iter=1000, random_state=42)
-        self.tsne_embedding = tsne.fit_transform(self.features)
-        print("t-SNE completed.")
-
-        print("Building k-NN model on t-SNE embedding...")
-        self.knn_model = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree')
-        self.knn_model.fit(self.tsne_embedding)
+    def _setup_knn(self, n_neighbors=11):
+        """Builds a k-NN model on the high-dimensional feature data."""
+        print("Building k-NN model on feature data...")
+        # Use 'minkowski' with p=2 for Euclidean distance, which is standard for k-NN
+        self.knn_model = NearestNeighbors(n_neighbors=n_neighbors, algorithm='ball_tree', metric='minkowski', p=2)
+        self.knn_model.fit(self.features)
         print("k-NN model built.")
 
     def get_available_labels(self) -> List[str]:
@@ -190,7 +190,7 @@ class ShapeSearcher:
         Finds the most similar shapes to a given query shape.
 
         Uses:
-        - 'tsne-knn' -> k-NN search on t-SNE embedding.
+        - 'knn' -> k-NN search on the high-dimensional feature vectors.
         - composite metrics -> combined hist/scalar functions.
         - simple metrics -> single distance applied per feature group with feature weighting.
         """
@@ -201,7 +201,7 @@ class ShapeSearcher:
 
         query_idx = self.labels.index(query_label)
 
-        if metric == 'tsne-knn':
+        if metric == 'knn':
             return self._search_knn(query_idx, top_n)
 
         query_vec = self.features[query_idx]
@@ -219,13 +219,13 @@ class ShapeSearcher:
         return results[:top_n]
 
     def _search_knn(self, query_index: int, top_n: int) -> List[str]:
-        """Performs a k-NN search on the pre-computed t-SNE embedding."""
-        if self.knn_model is None or self.tsne_embedding is None:
+        """Performs a k-NN search on the pre-computed feature model."""
+        if self.knn_model is None:
             raise RuntimeError("k-NN model is not available.")
 
-        query_vec_2d = self.tsne_embedding[query_index].reshape(1, -1)
+        query_vec = self.features[query_index].reshape(1, -1)
         # Query for top_n + 1 to account for the query item itself
-        distances, indices = self.knn_model.kneighbors(query_vec_2d, n_neighbors=top_n + 1)
+        distances, indices = self.knn_model.kneighbors(query_vec, n_neighbors=top_n + 1)
 
         # Exclude the first result (which is the query item itself)
         neighbor_indices = indices.flatten()[1:]
@@ -254,6 +254,8 @@ class ShapeSearcher:
             total_dist += sub_weights[group] * raw_dist
 
         return float(total_dist)
+
+
 
     def _compute_distance(self, vec_a: np.ndarray, vec_b: np.ndarray, metric: str) -> float:
         """Computes the final weighted distance between two feature vectors using feature weighting only."""
