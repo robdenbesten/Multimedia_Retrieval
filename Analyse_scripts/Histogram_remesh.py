@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
 
+# Configuration constant
+BIN_WIDTH = 500
+
 def count_vertices_in_obj(obj_file_path):
     """
     Count the number of vertices in an OBJ file.
@@ -112,10 +115,10 @@ def create_histogram_from_csv():
         print(f"Error reading CSV file: {e}")
         return
     
-    # Create bins with width 5000
+    # Create bins with configurable width, offset by half bin width
     vertex_counts = df['Vertex_Count'].values
-    max_vertices = int(np.ceil(vertex_counts.max() / 5000) * 5000)
-    bins = np.arange(0, max_vertices + 5000, 5000)
+    max_vertices = int(np.ceil((vertex_counts.max() + BIN_WIDTH//2) / BIN_WIDTH) * BIN_WIDTH)
+    bins = np.arange(-BIN_WIDTH//2, max_vertices + BIN_WIDTH//2, BIN_WIDTH)
     
     # Create histogram data
     hist_counts, bin_edges = np.histogram(vertex_counts, bins=bins)
@@ -129,9 +132,11 @@ def create_histogram_from_csv():
         category = row['Category']
         object_name = row['Object_Name']
         
-        # Find which bin this vertex count belongs to
-        bin_index = int(vertex_count // 5000)
-        bin_range = f"{bin_index * 5000}-{(bin_index + 1) * 5000}"
+        # Find which bin this vertex count belongs to (accounting for offset)
+        bin_index = int((vertex_count + BIN_WIDTH//2) // BIN_WIDTH)
+        bin_start = bin_index * BIN_WIDTH - BIN_WIDTH//2
+        bin_end = bin_start + BIN_WIDTH
+        bin_range = f"{bin_start}-{bin_end}"
         
         bin_data[bin_range].append({
             'category': category,
@@ -143,8 +148,8 @@ def create_histogram_from_csv():
     fig, ax = plt.subplots(figsize=(12, 8))
     
     # Plot bars
-    bar_centers = bin_edges[:-1] + 2500  # Center of each bin
-    bars = ax.bar(bar_centers, hist_counts, width=4500, alpha=0.7, edgecolor='black')
+    bar_centers = bin_edges[:-1] + BIN_WIDTH // 2  # Center of each bin
+    bars = ax.bar(bar_centers, hist_counts, width=BIN_WIDTH * 0.9, alpha=0.7, edgecolor='black')
     
     # Customize the plot
     ax.set_xlabel('Vertex Count', fontsize=12)
@@ -152,9 +157,11 @@ def create_histogram_from_csv():
     ax.set_title('Distribution of Vertex Counts in Normalized Objects', fontsize=14)
     ax.grid(True, alpha=0.3)
     
-    # Set x-axis ticks and labels
-    ax.set_xticks(bar_centers)
-    ax.set_xticklabels([f"{int(edge)}-{int(edge + 5000)}" for edge in bin_edges[:-1]], rotation=45)
+    # Set x-axis ticks and labels (show every 5th bin to avoid overcrowding)
+    tick_step = max(1, len(bar_centers) // 20)  # Adjust based on number of bins
+    tick_indices = range(0, len(bar_centers), tick_step)
+    ax.set_xticks([bar_centers[i] for i in tick_indices])
+    ax.set_xticklabels([f"{int(bin_edges[i])}-{int(bin_edges[i] + BIN_WIDTH)}" for i in tick_indices], rotation=45)
     
     # Add hover functionality
     def on_hover(event):
