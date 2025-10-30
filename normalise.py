@@ -5,7 +5,7 @@ import trimesh
 
 TARGET_VERTICES = 5000
 ORIGINAL_DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
-NORMALISED_DATABASE_LOCATION = r'Normalised-objects2'
+NORMALISED_DATABASE_LOCATION = r'Normalised-objects'
 
 
 class Mesh:
