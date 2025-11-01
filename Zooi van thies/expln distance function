@@ -1,0 +1,38 @@
+Here is how distance weighting works conceptually and operationally:
+Goal
+Replace manual per-feature weights with an automatic, data-driven scaling that balances feature groups with very different natural ranges.
+Intuition: standardize distances per group so each group contributes on a comparable scale, similar to z-scoring but applied to distances rather than raw features.
+Preprocessing of features
+Histograms (e.g., A3, D1–D4) are normalized by their sum so they represent distributions.
+Scalar features (e.g., Surface area, Diameter) are standardized across the dataset to zero mean and unit variance.
+This makes inputs comparable, but groups can still yield very different distance magnitudes; distance weighting addresses this.
+Building the distance weightmap
+For each metric and feature group, estimate the empirical spread (standard deviation) of distances across the dataset.
+Procedure:
+Randomly sample up to max_pairs distinct pairs of shapes from the dataset.
+For each sampled pair, compute the distance of each group using the correct function for that metric:
+Scalar groups use scalar distance (e.g., L1/Manhattan).
+Histogram groups use histogram distance (e.g., Chi-Squared, EMD, or symmetric KL for composite metrics).
+Accumulate mean/variance online (Welford’s algorithm) per (metric, group) so you don’t store all distances.
+Convert variance to standard deviation; clamp to a small floor (min_std) to avoid division by near-zero.
+The result is a map: {metric: {group: std_of_group_distances}}.
+Saved once to distance_weightmap.json and reused on subsequent runs to avoid recomputation.
+Using the weightmap during search
+To compare a query with another shape under a chosen metric:
+Compute each group’s raw distance with the metric’s appropriate function.
+Divide that raw distance by the precomputed std scale for (metric, group) from the weightmap.
+Sum these standardized group distances to get the overall distance.
+Composite metrics apply different functions for histogram vs. scalar groups; the map stores scales for each case.
+The knn option is separate and does not use distance weighting.
+Why this helps
+Groups that naturally produce larger raw distances won’t dominate the final score.
+Groups that produce small raw distances get scaled up so their meaningful variations matter.
+Removes the need to hand-tune per-feature weights.
+Safeguards and caveats
+If a descriptor is near-constant, its empirical std can be tiny, which would over-amplify noise. Mitigations:
+Clamp by min_std and use an EPS in divisions.
+Ensure the weightmap is computed on a representative dataset.
+If the dataset, features, or metric definitions change, rebuild the weightmap to keep scales consistent.
+Parallel execution considerations
+Build the map once on the main process, save it to distance_weightmap.json.
+In workers/threads, load the saved map; do not rebuild to avoid redundant work and file races.
