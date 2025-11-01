@@ -223,7 +223,7 @@ if __name__ == '__main__':
     # --- Configuration for Statistics ---
     # Set k to an integer (e.g., 10) to evaluate top-k results.
     # Set k to None to evaluate top-N results (where N = category size - 1).
-    K_VALUE = 10
+    K_VALUE = None
 
     results_files = [
         'raw_res_manhattan.csv',
@@ -235,6 +235,357 @@ if __name__ == '__main__':
     for file_path in results_files:
         try:
             calculate_statistics(file_path, k=K_VALUE)
+        except FileNotFoundError:
+            print(f"Error: The file `{file_path}` was not found. Skipping.", file=sys.stderr)
+        except Exception as e:
+            print(f"An error occurred while processing `{file_path}`: {e}", file=sys.stderr)
+
+
+# python
+import csv
+import sys
+import random
+from collections import defaultdict
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+
+
+def balance_query_data(query_data: list, method: str = 'oversample', target_size: int | None = None) -> list:
+    if method is None:
+        return list(query_data)
+
+    buckets = defaultdict(list)
+    for row in query_data:
+        buckets[row['query_category']].append(row)
+
+    sizes = [len(v) for v in buckets.values()]
+    if not sizes:
+        return []
+
+    target = target_size if target_size is not None else (max(sizes) if method == 'oversample' else min(sizes))
+
+    balanced = []
+    for cat, rows in buckets.items():
+        n = len(rows)
+        if n == target:
+            balanced.extend(rows)
+        elif n < target:
+            balanced.extend(rows + random.choices(rows, k=target - n))
+        else:
+            balanced.extend(random.sample(rows, k=target))
+    random.shuffle(balanced)
+    return balanced
+
+
+def calculate_statistics_for_metric(metric_name: str, query_data: list, csv_path: str, k: int | None = None):
+    """
+    Calculate stats for a single metric group and return ROC data (fpr, tpr, auc).
+    """
+    all_stats = []
+    category_counts = defaultdict(int)
+    y_true_all = []
+    y_scores_all = []
+
+    for row in query_data:
+        category_counts[row['query_category']] += 1
+    total_items = len(query_data)
+
+    for row in query_data:
+        query_category = row['query_category']
+        retrieved_cols = [key for key in row.keys() if key.startswith('retrieved_cat_rank_')]
+        retrieved_cols.sort(key=lambda x: int(x.split('_')[-1]) if x.split('_')[-1].isdigit() else 0)
+        retrieved_cats = [row[key] for key in retrieved_cols if row[key] != '']
+
+        N = max(0, category_counts[query_category] - 1)
+        eval_k = k if k is not None else N
+        retrieved_top_k = retrieved_cats[:eval_k]
+
+        y_true = [1 if cat == query_category else 0 for cat in retrieved_cats]
+        y_scores = [len(retrieved_cats) - i for i in range(len(retrieved_cats))]
+        y_true_all.extend(y_true)
+        y_scores_all.extend(y_scores)
+
+        TP = sum(1 for cat in retrieved_top_k if cat == query_category)
+        FP = len(retrieved_top_k) - TP
+        FN = N - TP
+        population_excl_query = max(0, total_items - 1)
+        TN = (population_excl_query - N) - FP
+
+        precision_at_k_vals = [
+            sum(1 for cat in retrieved_top_k[:i] if cat == query_category) / i
+            for i in range(1, len(retrieved_top_k) + 1)
+        ]
+        ap_numerator = sum(p for p, cat in zip(precision_at_k_vals, retrieved_top_k) if cat == query_category)
+        average_precision = ap_numerator / N if N > 0 else 0.0
+
+        last_rank_consecutive = 0
+        for cat in retrieved_top_k:
+            if cat == query_category:
+                last_rank_consecutive += 1
+            else:
+                break
+
+        all_stats.append({
+            'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN,
+            'first_tier_correct': 1 if retrieved_top_k and retrieved_top_k[0] == query_category else 0,
+            'average_precision': average_precision,
+            'last_rank': last_rank_consecutive
+        })
+
+    num_queries = len(all_stats)
+    if num_queries == 0:
+        print(f"No data to process for metric '{metric_name}'.")
+        return None, None, 0.0
+
+    fpr, tpr, roc_auc = None, None, 0.0
+    if y_true_all and y_scores_all:
+        fpr, tpr, _ = roc_curve(y_true_all, y_scores_all)
+        roc_auc = auc(fpr, tpr)
+
+    total_tp = sum(s['TP'] for s in all_stats)
+    total_fp = sum(s['FP'] for s in all_stats)
+    total_tn = sum(s['TN'] for s in all_stats)
+    total_fn = sum(s['FN'] for s in all_stats)
+    total_pop = total_tp + total_fp + total_tn + total_fn
+
+    accuracy = (total_tp + total_tn) / total_pop if total_pop > 0 else 0.0
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    specificity_val = total_tn / (total_tn + total_fp) if (total_tn + total_fp) > 0 else 0.0
+    relative_error = (total_fp + total_fn) / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
+    first_tier_accuracy = sum(s['first_tier_correct'] for s in all_stats) / num_queries
+    mean_avg_precision = sum(s['average_precision'] for s in all_stats) / num_queries
+    fvalue = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    avg_last_rank = sum(s['last_rank'] for s in all_stats) / num_queries
+
+    k_str = f"k={k}" if k is not None else "k=N"
+    print(f"--- Stats for `{csv_path}` (Metric: {metric_name}, {k_str}) ---")
+    print(f"Processed {num_queries} queries.")
+    print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {fvalue:.4f}, AUC: {roc_auc:.4f}\n")
+
+    return fpr, tpr, roc_auc
+
+
+def calculate_statistics_by_metric(csv_path: str, metric_column: str, k: int | None = None, balance_method: str | None = 'oversample'):
+    grouped_data = defaultdict(list)
+
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        if metric_column not in reader.fieldnames:
+            print(f"Error: Metric column `{metric_column}` not found in `{csv_path}`.", file=sys.stderr)
+            return
+        for row in reader:
+            grouped_data[row[metric_column]].append(row)
+
+    if not grouped_data:
+        print("No data to process in the file.")
+        return
+
+    plt.figure(figsize=(10, 8))
+    colors = plt.cm.get_cmap('tab10', max(1, len(grouped_data)))
+
+    for i, (metric_name, query_data) in enumerate(grouped_data.items()):
+        data_to_use = balance_query_data(query_data, method=balance_method) if balance_method else query_data
+        fpr, tpr, roc_auc = calculate_statistics_for_metric(metric_name, data_to_use, csv_path, k)
+        if fpr is not None and tpr is not None:
+            specificity = 1 - fpr
+            plt.plot(tpr, specificity, color=colors(i), lw=2, label=f'{metric_name} (AUC={roc_auc:.2f})')
+
+    plt.plot([0, 1], [1, 0], color='red', lw=1, linestyle='--', label='Chance')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Sensitivity (TPR)')
+    plt.ylabel('Specificity (1 - FPR)')
+    plt.title(f'Combined ROC Curve for `{csv_path}`')
+    plt.legend(loc="lower left")
+    plt.grid(True)
+    plt.show()
+
+
+if __name__ == '__main__':
+    K_VALUE = None
+    METRIC_COLUMN_NAME = 'metric'
+    results_files = ['neutralresults.csv']
+
+    for file_path in results_files:
+        try:
+            calculate_statistics_by_metric(file_path, metric_column=METRIC_COLUMN_NAME, k=K_VALUE, balance_method='oversample')
+        except FileNotFoundError:
+            print(f"Error: The file `{file_path}` was not found. Skipping.", file=sys.stderr)
+        except Exception as e:
+            print(f"An error occurred while processing `{file_path}`: {e}", file=sys.stderr)
+
+
+# python
+import csv
+import sys
+from collections import defaultdict
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+
+
+def calculate_statistics_for_metric(metric_name: str, query_data: list, csv_path: str, k: int = None):
+    """
+    Calculate and display performance statistics for a specific metric's data.
+    Returns ROC curve data for plotting.
+    """
+    all_stats = []
+    category_counts = defaultdict(int)
+    y_true_all = []
+    y_scores_all = []
+
+    for row in query_data:
+        category_counts[row['query_category']] += 1
+    total_items = len(query_data)
+
+    for row in query_data:
+        query_category = row['query_category']
+        retrieved_cols = [key for key in row.keys() if key.startswith('retrieved_cat_rank_')]
+        retrieved_cols.sort(key=lambda x: int(x.split('_')[-1]) if x.split('_')[-1].isdigit() else 0)
+        retrieved_cats = [row[key] for key in retrieved_cols if row[key] != '']
+
+        N = max(0, category_counts[query_category] - 1)
+        eval_k = k if k is not None else N
+        retrieved_top_k = retrieved_cats[:eval_k]
+
+        y_true = [1 if cat == query_category else 0 for cat in retrieved_cats]
+        y_scores = [len(retrieved_cats) - i for i in range(len(retrieved_cats))]
+        y_true_all.extend(y_true)
+        y_scores_all.extend(y_scores)
+
+        TP = sum(1 for cat in retrieved_top_k if cat == query_category)
+        FP = len(retrieved_top_k) - TP
+        FN = N - TP
+        population_excl_query = max(0, total_items - 1)
+        TN = (population_excl_query - N) - FP
+
+        precision_at_k_vals = [
+            sum(1 for cat in retrieved_top_k[:i] if cat == query_category) / i
+            for i in range(1, len(retrieved_top_k) + 1)
+        ]
+        ap_numerator = sum(p for p, cat in zip(precision_at_k_vals, retrieved_top_k) if cat == query_category)
+        average_precision = ap_numerator / N if N > 0 else 0.0
+
+        last_rank_consecutive = 0
+        for cat in retrieved_top_k:
+            if cat == query_category:
+                last_rank_consecutive += 1
+            else:
+                break
+
+        all_stats.append({
+            'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN,
+            'first_tier_correct': 1 if retrieved_top_k and retrieved_top_k[0] == query_category else 0,
+            'average_precision': average_precision,
+            'last_rank': last_rank_consecutive
+        })
+
+    num_queries = len(all_stats)
+    if num_queries == 0:
+        print(f"No data to process for metric '{metric_name}'.")
+        return None, None, None
+
+    roc_auc = 0.0
+    fpr, tpr = None, None
+    if y_true_all and y_scores_all:
+        fpr, tpr, _ = roc_curve(y_true_all, y_scores_all)
+        roc_auc = auc(fpr, tpr)
+
+    total_tp = sum(s['TP'] for s in all_stats)
+    total_fp = sum(s['FP'] for s in all_stats)
+    total_tn = sum(s['TN'] for s in all_stats)
+    total_fn = sum(s['FN'] for s in all_stats)
+    total_pop = total_tp + total_fp + total_tn + total_fn
+
+    accuracy = (total_tp + total_tn) / total_pop if total_pop > 0 else 0.0
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    specificity_val = total_tn / (total_tn + total_fp) if (total_tn + total_fp) > 0 else 0.0
+    relative_error = (total_fp + total_fn) / (total_tp + total_tn) if (total_tp + total_tn) > 0 else 0.0
+    first_tier_accuracy = sum(s['first_tier_correct'] for s in all_stats) / num_queries
+    mean_avg_precision = sum(s['average_precision'] for s in all_stats) / num_queries
+    fvalue = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    avg_last_rank = sum(s['last_rank'] for s in all_stats) / num_queries
+
+    k_str = f"k={k}" if k is not None else "k=N"
+    print(f"--- Overall Performance Statistics for `{csv_path}` (Metric: {metric_name}, {k_str}) ---")
+    print(f"Processed {num_queries} queries.\n")
+    print("--- Truth Table (Averages per query) ---")
+    print(f"True Positives (TP):  {total_tp / num_queries:.2f}")
+    print(f"False Positives (FP): {total_fp / num_queries:.2f}")
+    print(f"True Negatives (TN):  {total_tn / num_queries:.2f}")
+    print(f"False Negatives (FN): {total_fn / num_queries:.2f}\n")
+    print("--- Retrieval Metrics ---")
+    print(f"Accuracy:             {accuracy:.4f}")
+    print(f"Precision:            {precision:.4f}")
+    print(f"Recall:               {recall:.4f}")
+    print(f"F1-Score:             {fvalue:.4f}")
+    print(f"Specificity:          {specificity_val:.4f}")
+    print(f"Relative Error:       {relative_error:.4f}")
+    print(f"First Tier Accuracy:  {first_tier_accuracy:.4f}")
+    print(f"Mean Average Precision (MAP): {mean_avg_precision:.4f}")
+    print(f"Area Under ROC (AUC): {roc_auc:.4f}")
+    print(f"Average Last Rank (consecutive correct from top): {avg_last_rank:.2f}\n")
+
+    return fpr, tpr, roc_auc
+
+
+def calculate_statistics_by_metric(csv_path: str, metric_column: str, k: int = None):
+    """
+    Calculate performance statistics from a wide-format CSV, grouped by a metric column.
+    `k` specifies the number of top results to consider for each query.
+    If `k` is None, it defaults to `N` (category_size - 1).
+    """
+    grouped_data = defaultdict(list)
+
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        if metric_column not in reader.fieldnames:
+            print(f"Error: Metric column `{metric_column}` not found in `{csv_path}`.", file=sys.stderr)
+            return
+        for row in reader:
+            grouped_data[row[metric_column]].append(row)
+
+    if not grouped_data:
+        print("No data to process in the file.")
+        return
+
+    plt.figure(figsize=(10, 8))
+    colors = plt.cm.get_cmap('tab10', len(grouped_data))
+
+    for i, (metric_name, query_data) in enumerate(grouped_data.items()):
+        fpr, tpr, roc_auc = calculate_statistics_for_metric(metric_name, query_data, csv_path, k)
+        if fpr is not None and tpr is not None:
+            specificity = 1 - fpr
+            plt.plot(tpr, specificity, color=colors(i), lw=2,
+                     label=f'{metric_name} (AUC = {roc_auc:.2f})')
+
+    plt.plot([0, 1], [1, 0], color='red', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Sensitivity (True Positive Rate)')
+    plt.ylabel('Specificity (1 - False Positive Rate)')
+    plt.title(f'Combined ROC Curve for `{csv_path}`')
+    plt.legend(loc="lower left")
+    plt.grid(True)
+    plt.show()
+
+
+if __name__ == '__main__':
+    # --- Configuration for Statistics ---
+    # Set k to an integer (e.g., 10) to evaluate top-k results.
+    # Set k to None to evaluate top-N results (where N = category size - 1).
+    K_VALUE = None
+    # Specify the name of the column that contains the metric identifier.
+    METRIC_COLUMN_NAME = 'metric'
+
+    results_files = [
+        'neutralresults.csv'
+    ]
+
+    for file_path in results_files:
+        try:
+            calculate_statistics_by_metric(file_path, metric_column=METRIC_COLUMN_NAME, k=K_VALUE)
         except FileNotFoundError:
             print(f"Error: The file `{file_path}` was not found. Skipping.", file=sys.stderr)
         except Exception as e:

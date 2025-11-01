@@ -1,60 +1,41 @@
 # python
-import os
 import csv
 import sys
 from collections import defaultdict
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
+import numpy as np
 
-def _calculate_stats_for_group(query_data: list, category_counts: dict, k: int = None):
+
+def calculate_statistics_for_metric(metric_name: str, query_data: list, csv_path: str, k: int | None = None):
     """
-    Calculates performance statistics for a group of query results.
-
-    Args:
-        query_data (list): A list of dictionaries, where each dictionary is a row
-                           from the input file for a specific metric.
-        category_counts (dict): A dictionary mapping category names to their total
-                                counts within the parent weight map.
-        k (int, optional): The number of top results to consider. Defaults to N.
-
-    Returns:
-        A tuple containing:
-        - dict: A dictionary of calculated statistics.
-        - list: A list of true labels for ROC calculation.
-        - list: A list of scores for ROC calculation.
+    Calculate stats for a single metric group and return ROC data (fpr, tpr, auc).
+    Uses macro-averaging for stratified evaluation.
     """
-    total_items = sum(category_counts.values())
-    all_stats_per_query = []
-    y_true_all = []
-    y_scores_all = []
+    all_stats = []
+    category_counts = defaultdict(int)
+
+    # count queries per class
+    for row in query_data:
+        category_counts[row['query_category']] += 1
+
+    total_items = len(query_data)
 
     for row in query_data:
         query_category = row['query_category']
-        retrieved_cols = sorted(
-            [key for key in row.keys() if key.startswith('retrieved_cat_rank_')],
-            key=lambda x: int(x.split('_')[-1])
-        )
-        retrieved_cats = [row[key] for key in retrieved_cols if row.get(key)]
+        retrieved_cols = [key for key in row.keys() if key.startswith('retrieved_cat_rank_')]
+        retrieved_cols.sort(key=lambda x: int(x.split('_')[-1]) if x.split('_')[-1].isdigit() else 0)
+        retrieved_cats = [row[key] for key in retrieved_cols if row[key] != '']
 
-        N = max(0, category_counts.get(query_category, 1) - 1)
+        N = max(0, category_counts[query_category] - 1)
         eval_k = k if k is not None else N
-        if eval_k == 0 and N > 0: # If k is not set, but N is > 0, use N
-             eval_k = N
-        elif eval_k == 0 and N == 0: # Avoid division by zero if N is 0
-             eval_k = 1
-
         retrieved_top_k = retrieved_cats[:eval_k]
-
-        # ROC Data Generation
-        y_true = [1 if cat == query_category else 0 for cat in retrieved_cats]
-        y_scores = [len(retrieved_cats) - i for i in range(len(retrieved_cats))]
-        y_true_all.extend(y_true)
-        y_scores_all.extend(y_scores)
 
         TP = sum(1 for cat in retrieved_top_k if cat == query_category)
         FP = len(retrieved_top_k) - TP
         FN = N - TP
-        TN = (total_items - 1 - N) - FP
+        population_excl_query = max(0, total_items - 1)
+        TN = (population_excl_query - N) - FP
 
         precision_at_k_vals = [
             sum(1 for cat in retrieved_top_k[:i] if cat == query_category) / i
@@ -70,158 +51,167 @@ def _calculate_stats_for_group(query_data: list, category_counts: dict, k: int =
             else:
                 break
 
-        all_stats_per_query.append({
+        all_stats.append({
             'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN,
             'first_tier_correct': 1 if retrieved_top_k and retrieved_top_k[0] == query_category else 0,
             'average_precision': average_precision,
-            'last_rank': last_rank_consecutive
+            'last_rank': last_rank_consecutive,
+            'query_category': query_category,
+            'retrieved_cats': retrieved_cats,
         })
 
-    num_queries = len(all_stats_per_query)
+    num_queries = len(all_stats)
     if num_queries == 0:
-        return {}, [], []
+        print(f"No data to process for metric '{metric_name}'.")
+        return None, None, 0.0
 
-    total_tp = sum(s['TP'] for s in all_stats_per_query)
-    total_fp = sum(s['FP'] for s in all_stats_per_query)
-    total_tn = sum(s['TN'] for s in all_stats_per_query)
-    total_fn = sum(s['FN'] for s in all_stats_per_query)
-    total_pop = total_tp + total_fp + total_tn + total_fn
+    # --- Stratified Evaluation (Macro-Averaging) ---
+    stats_by_category = defaultdict(list)
+    for stat in all_stats:
+        stats_by_category[stat['query_category']].append(stat)
 
-    accuracy = (total_tp + total_tn) / total_pop if total_pop > 0 else 0.0
-    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
-    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    specificity_val = total_tn / (total_tn + total_fp) if (total_tn + total_fp) > 0 else 0.0
-    fvalue = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-    first_tier_accuracy = sum(s['first_tier_correct'] for s in all_stats_per_query) / num_queries
-    mean_avg_precision = sum(s['average_precision'] for s in all_stats_per_query) / num_queries
-    avg_last_rank = sum(s['last_rank'] for s in all_stats_per_query) / num_queries
+    category_metrics = []
+    all_tpr = {}
+    mean_fpr = np.linspace(0, 1, 100)
+
+    for category, cat_stats in stats_by_category.items():
+        cat_tp = sum(s['TP'] for s in cat_stats)
+        cat_fp = sum(s['FP'] for s in cat_stats)
+        cat_tn = sum(s['TN'] for s in cat_stats)
+        cat_fn = sum(s['FN'] for s in cat_stats)
+
+        accuracy = (cat_tp + cat_tn) / (cat_tp + cat_fp + cat_tn + cat_fn) if (cat_tp + cat_fp + cat_tn + cat_fn) > 0 else 0.0
+        precision = cat_tp / (cat_tp + cat_fp) if (cat_tp + cat_fp) > 0 else 0.0
+        recall = cat_tp / (cat_tp + cat_fn) if (cat_tp + cat_fn) > 0 else 0.0
+        specificity = cat_tn / (cat_tn + cat_fp) if (cat_tn + cat_fp) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+        first_tier_accuracy = sum(s['first_tier_correct'] for s in cat_stats) / len(cat_stats) if cat_stats else 0.0
+        mean_avg_precision = sum(s['average_precision'] for s in cat_stats) / len(cat_stats) if cat_stats else 0.0
+        avg_last_rank = sum(s['last_rank'] for s in cat_stats) / len(cat_stats) if cat_stats else 0.0
+
+        category_metrics.append({
+            'accuracy': accuracy, 'precision': precision, 'recall': recall, 'specificity': specificity, 'f1': f1,
+            'first_tier_accuracy': first_tier_accuracy, 'mean_avg_precision': mean_avg_precision,
+            'avg_last_rank': avg_last_rank
+        })
+
+        # ROC for this category
+        y_true_cat = []
+        y_scores_cat = []
+        for s in cat_stats:
+            y_true_cat.extend([1 if cat == s['query_category'] else 0 for cat in s['retrieved_cats']])
+            y_scores_cat.extend([len(s['retrieved_cats']) - i for i in range(len(s['retrieved_cats']))])
+
+        if y_true_cat and y_scores_cat:
+            fpr, tpr, _ = roc_curve(y_true_cat, y_scores_cat)
+            all_tpr[category] = np.interp(mean_fpr, fpr, tpr)
+            all_tpr[category][0] = 0.0
+
+    # Macro-average metrics
+    num_categories = len(category_metrics)
+    if num_categories == 0:
+        return None, None, 0.0
+
+    macro_avg_accuracy = sum(m['accuracy'] for m in category_metrics) / num_categories
+    macro_avg_precision = sum(m['precision'] for m in category_metrics) / num_categories
+    macro_avg_recall = sum(m['recall'] for m in category_metrics) / num_categories
+    macro_avg_specificity = sum(m['specificity'] for m in category_metrics) / num_categories
+    macro_avg_f1 = sum(m['f1'] for m in category_metrics) / num_categories
+    macro_avg_first_tier = sum(m['first_tier_accuracy'] for m in category_metrics) / num_categories
+    macro_avg_map = sum(m['mean_avg_precision'] for m in category_metrics) / num_categories
+    macro_avg_last_rank = sum(m['avg_last_rank'] for m in category_metrics) / num_categories
+
+    # Macro-average ROC
+    if all_tpr:
+        mean_tpr = np.mean([tpr for tpr in all_tpr.values()], axis=0)
+        mean_tpr[-1] = 1.0
+        roc_auc = auc(mean_fpr, mean_tpr)
+        final_tpr, final_fpr = mean_tpr, mean_fpr
+    else:
+        final_tpr, final_fpr, roc_auc = None, None, 0.0
 
     k_str = f"k={k}" if k is not None else "k=N"
+    print(f"--- Macro-Averaged Stats for `{csv_path}` (Metric: {metric_name}, {k_str}) ---")
+    print(f"Processed {num_queries} queries across {num_categories} categories.")
+    print(f"Accuracy: {macro_avg_accuracy:.4f}, Precision: {macro_avg_precision:.4f}, Recall: {macro_avg_recall:.4f}, F1: {macro_avg_f1:.4f}, AUC: {roc_auc:.4f}\n")
 
-    stats_row = {
-        'metric': query_data[0]['metric'],
-        'weights_map': query_data[0]['weights_map'],
-        'k': k_str,
-        'num_queries': num_queries,
-        'total_TP': total_tp,
-        'total_FP': total_fp,
-        'total_TN': total_tn,
-        'total_FN': total_fn,
-        'accuracy': round(accuracy, 6),
-        'precision': round(precision, 6),
-        'recall': round(recall, 6),
-        'f1_score': round(fvalue, 6),
-        'specificity': round(specificity_val, 6),
-        'first_tier_accuracy': round(first_tier_accuracy, 6),
-        'mean_average_precision': round(mean_avg_precision, 6),
-        'avg_last_rank': round(avg_last_rank, 6)
-    }
-    return stats_row, y_true_all, y_scores_all
+    return final_fpr, final_tpr, roc_auc
 
-def generate_report_for_weight_map(weight_map_name: str, data_by_metric: dict, category_counts: dict, k: int = None):
+
+def calculate_statistics_by_metric(csv_path: str, metric_column: str, k: int | None = None,
+                                   weights_column: str | None = None, weights_value: str | None = None):
     """
-    Generates a consolidated report for a single weight map.
-
-    Args:
-        weight_map_name (str): The name of the weight map being processed.
-        data_by_metric (dict): Data grouped by metric for this weight map.
-        category_counts (dict): Counts of each category for this weight map.
-        k (int, optional): The 'k' value for top-k analysis.
+    Calculate performance statistics from a wide-format CSV, grouped by a metric column.
+    Optionally filters rows by a weights column/value (e.g., 'neutral', 'adjusted', 'distance').
     """
-    all_stats_rows = []
+    grouped_data = defaultdict(list)
+
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        if metric_column not in reader.fieldnames:
+            print(f"Error: Metric column `{metric_column}` not found in `{csv_path}`.", file=sys.stderr)
+            return
+
+        chosen_wcol = None
+        if weights_value is not None:
+            candidates = []
+            if weights_column:
+                candidates.append(weights_column)
+            # Auto-detect common names if explicit column not provided or missing
+            candidates += ['weights_map', 'weights', 'weighting_method']
+            chosen_wcol = next((c for c in candidates if c in reader.fieldnames), None)
+            if not chosen_wcol:
+                print(f"Error: No weights column found in `{csv_path}`. Tried: {candidates}.", file=sys.stderr)
+                return
+
+        for row in reader:
+            if chosen_wcol is not None and row.get(chosen_wcol) != weights_value:
+                continue
+            grouped_data[row[metric_column]].append(row)
+
+    if not grouped_data:
+        sel = f" with `{weights_column or chosen_wcol}`=`{weights_value}`" if weights_value is not None else ""
+        print(f"No data to process in the file `{csv_path}`{sel}.")
+        return
+
     plt.figure(figsize=(10, 8))
+    colors = plt.cm.get_cmap('tab10', max(1, len(grouped_data)))
 
-    for metric_name, metric_data in data_by_metric.items():
-        stats_row, y_true, y_scores = _calculate_stats_for_group(metric_data, category_counts, k=k)
-        if not stats_row:
-            print(f"Warning: No data for metric `{metric_name}` in `{weight_map_name}`. Skipping.", file=sys.stderr)
-            continue
+    for i, (metric_name, query_data) in enumerate(grouped_data.items()):
+        fpr, tpr, roc_auc = calculate_statistics_for_metric(metric_name, query_data, csv_path, k)
+        if fpr is not None and tpr is not None:
+            specificity = 1 - fpr
+            plt.plot(tpr, specificity, color=colors(i), lw=2, label=f'{metric_name} (AUC={roc_auc:.2f})')
 
-        fpr, tpr, _ = roc_curve(y_true, y_scores)
-        specificity = 1 - fpr
-        roc_auc = auc(tpr, specificity) # AUC of Sensitivity vs. Specificity
-        stats_row['roc_auc'] = round(auc(fpr, tpr), 6) # Store standard AUC
-        all_stats_rows.append(stats_row)
-
-        # Plot Sensitivity (TPR) vs. Specificity (1-FPR)
-        plt.plot(tpr, specificity, lw=2, label=f'{metric_name} (AUC = {auc(fpr, tpr):.2f})')
-
-    # Finalize and save the ROC plot for the weight map
-    plt.plot([0, 1], [1, 0], color='navy', lw=2, linestyle='--') # Chance line for Sensitivity vs. Specificity
+    plt.plot([0, 1], [1, 0], color='red', lw=1, linestyle='--', label='Chance')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
-    plt.xlabel('Sensitivity (True Positive Rate)')
-    plt.ylabel('Specificity (True Negative Rate)')
-    plt.title(f'Consolidated ROC Curves for {weight_map_name}')
+    suffix = f" | weights={weights_value}" if weights_value is not None else ""
+    plt.xlabel('Sensitivity (TPR)')
+    plt.ylabel('Specificity (1 - FPR)')
+    plt.title(f'Combined ROC Curve for `{csv_path}` (Macro-Averaged){suffix}')
     plt.legend(loc="lower left")
     plt.grid(True)
-    plot_path = f"{weight_map_name}_ROC_curves.png"
-    plt.savefig(plot_path)
-    plt.close() # Close figure to free memory
-    print(f"Report for `{weight_map_name}` saved to `{plot_path}`")
+    plt.show()
 
-    # Write the statistics to a CSV file for the weight map
-    if not all_stats_rows:
-        return
-    stats_csv_path = f"{weight_map_name}_stats_summary.csv"
-    # Ensure roc_auc is the last column for consistency
-    fieldnames = [f for f in all_stats_rows[0].keys() if f != 'roc_auc'] + ['roc_auc']
-    with open(stats_csv_path, 'w', newline='', encoding='utf-8') as outf:
-        writer = csv.DictWriter(outf, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_stats_rows)
-    print(f"Statistics for `{weight_map_name}` saved to `{stats_csv_path}`")
-
-def process_input_file(csv_path: str, k: int = None):
-    """
-    Reads the main input CSV and generates reports for each weight map.
-
-    Args:
-        csv_path (str): The path to the input CSV file.
-        k (int, optional): The 'k' value for top-k analysis.
-    """
-    try:
-        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
-            all_data = list(csv.DictReader(f))
-    except FileNotFoundError:
-        print(f"Error: The file `{csv_path}` was not found.", file=sys.stderr)
-        return
-    except Exception as e:
-        print(f"An error occurred while reading `{csv_path}`: {e}", file=sys.stderr)
-        return
-
-    # Group all data by weight map
-    data_by_weight_map = defaultdict(list)
-    for row in all_data:
-        data_by_weight_map[row['weights_map']].append(row)
-
-    # Process each weight map group separately
-    for weight_map_name, weight_map_data in data_by_weight_map.items():
-        print(f"\nProcessing weight map: `{weight_map_name}`...")
-
-        # Group this weight map's data by metric
-        data_by_metric = defaultdict(list)
-        # Calculate category counts *once* for the entire weight map
-        category_counts = defaultdict(int)
-        # Use a set to count unique queries for category counts
-        processed_queries = set()
-
-        for row in weight_map_data:
-            data_by_metric[row['metric']].append(row)
-            query_id = (row['query_label'], row['query_category'])
-            if query_id not in processed_queries:
-                category_counts[row['query_category']] += 1
-                processed_queries.add(query_id)
-
-        generate_report_for_weight_map(weight_map_name, data_by_metric, category_counts, k)
 
 if __name__ == '__main__':
-    # --- Configuration ---
-    # Define the single input file containing all results.
-    INPUT_FILE = 'raw_results_all.csv'
-
-    # Set k to an integer for top-k, or None for top-N (category size - 1).
+    # Single combined results file; filter by a column that specifies weight method
     K_VALUE = None
+    METRIC_COLUMN_NAME = 'metric'
+    RESULTS_FILE = 'raw_results_all2.csv'  # your single file
+    WEIGHTS_COLUMN = 'weights_map'        # set to the actual column name in your CSV
+    WEIGHTS_FILTER = 'adjusted'           # e.g., 'neutral', 'adjusted', 'distance'
 
-    # --- Execution ---
-    process_input_file(INPUT_FILE, k=K_VALUE)
+    try:
+        calculate_statistics_by_metric(
+            RESULTS_FILE,
+            metric_column=METRIC_COLUMN_NAME,
+            k=K_VALUE,
+            weights_column=WEIGHTS_COLUMN,
+            weights_value=WEIGHTS_FILTER
+        )
+    except FileNotFoundError:
+        print(f"Error: The file `{RESULTS_FILE}` was not found. Skipping.", file=sys.stderr)
+    except Exception as e:
+        print(f"An error occurred while processing `{RESULTS_FILE}`: {e}", file=sys.stderr)
