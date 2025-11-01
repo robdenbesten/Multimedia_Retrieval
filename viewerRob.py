@@ -14,11 +14,11 @@ from normalise import Mesh
 from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 # Import the comparison algorithm components
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS, WEIGHTING_METHOD
+from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
-FEATURE_CSV = 'Feature-matrix/all_features.csv'  # Path to your main feature database
+FEATURE_CSV = 'Feature-matrix/all_features_modified.csv'  # Path to your main feature database
 
 
 class MeshViewer(QMainWindow):
@@ -44,7 +44,7 @@ class MeshViewer(QMainWindow):
             self.searcher = ShapeSearcher(
                 feature_csv_path=FEATURE_CSV,
                 weights=MANUAL_WEIGHTS,
-                weighting_method=WEIGHTING_METHOD
+                weighting_method = 'neutral'  # or 'feature'
             )
         except Exception as e:
             print(f"Failed to initialize searcher: {e}")
@@ -225,9 +225,9 @@ class MeshViewer(QMainWindow):
                 QApplication.processEvents()
                 
                 # Step 4: Extract features (this doesn't affect display)
-                self.status_label.setText(f'Extracting features:\n{os.path.basename(file_path)}')
-                QApplication.processEvents()
-                self.extract_features()
+                #self.status_label.setText(f'Extracting features:\n{os.path.basename(file_path)}')
+                #QApplication.processEvents()
+                #self.extract_features()
                 
                 # Step 5: Enable controls and finalize
                 self.normalize_checkbox.setEnabled(True)
@@ -333,8 +333,8 @@ class MeshViewer(QMainWindow):
         except Exception as e:
             print(f"Error displaying result mesh {file_path}: {e}")
 
-    def extract_features(self):
-        """Extract features from the normalized mesh and save to CSV"""
+    """def extract_features(self):
+        #Extract features from the normalized mesh and save to CSV
         if not self.normalized_file or not os.path.exists(self.normalized_file):
             print("No normalized file to extract features from")
             return
@@ -390,7 +390,7 @@ class MeshViewer(QMainWindow):
         except Exception as e:
             print(f"Error in extract_features: {e}")
             import traceback
-            traceback.print_exc()
+            traceback.print_exc() """
 
     def display_mesh(self, file_path):
         """Display mesh in the main viewer."""
