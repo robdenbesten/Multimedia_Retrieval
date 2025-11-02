@@ -211,10 +211,23 @@ def compute_convex_hull_metrics(original_mesh: trimesh.Trimesh) -> dict:
         convexity = float('nan')
 
     try:
-        moments = hull.principal_inertia_components
-        eccentricity = float(moments[0] / moments[2]) if (moments[2] and moments[2] > 1e-9) else float('nan')
+        ext = np.asarray(hull_extents, dtype=float)
+        if ext.size == 3 and np.all(np.isfinite(ext)) and np.min(ext) > 1e-9:
+            a = float(np.max(ext))
+            c = float(np.min(ext))
+            eccentricity = a / c
+        else:
+            raise ValueError("Invalid extents")
     except Exception:
-        eccentricity = float('nan')
+        try:
+            comps = np.asarray(hull.principal_inertia_components, dtype=float)
+            comps = np.sort(comps)  # ascending: [smallest, ..., largest]
+            if comps[0] > 1e-9 and np.isfinite(comps[-1]):
+                eccentricity = float(comps[-1] / comps[0])
+            else:
+                eccentricity = float('nan')
+        except Exception:
+            eccentricity = float('nan')
 
     return {
         "Mesh volume": hull_volume,
@@ -345,7 +358,7 @@ def extract_features_for_all_meshes(
         header += [f'{k}_bin_{i}' for i in range(n_bins)]
 
     os.makedirs(features_dir, exist_ok=True)
-    out_csv = os.path.join(features_dir, 'all_features.csv')
+    out_csv = os.path.join(features_dir, 'all_features2.csv')
 
     work_total = len(tasks)
     print(f'Processing {work_total} meshes with {max_workers} workers...')
