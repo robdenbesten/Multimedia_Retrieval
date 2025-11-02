@@ -139,7 +139,7 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
 
     if not category_results:
         print(f"No valid category results for metric '{metric_name}'.")
-        return None, None, 0.0, {}
+        return None, None, 0.0, {}, {}
 
     # Calculate macro-averaged metrics (each category weighted equally)
     macro_precision = np.mean([res['precision'] for res in category_results.values()])
@@ -282,7 +282,7 @@ def calculate_statistics(csv_path: str, k: int = None):
     metric_data = {metric: [row for row in all_rows if row.get('metric', '').strip() == metric] for metric in metrics}
 
     # Calculate statistics for each metric
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(10, 10))
     all_metric_stats = []
 
     # Store per-category results for heatmap
@@ -303,9 +303,8 @@ def calculate_statistics(csv_path: str, k: int = None):
             category_performance[metric] = category_results
 
         if fpr is not None and tpr is not None and roc_auc > 0:
-            # Plot TPR vs Specificity (1-FPR) for top-left to bottom-right curves
-            specificity = 1 - fpr
-            plt.plot(tpr, specificity, lw=2, label=f'{metric} (AUC = {roc_auc:.3f})')
+            # Plot a standard ROC curve: TPR vs FPR
+            plt.plot(fpr, tpr, lw=2, label=f'{metric} (AUC = {roc_auc:.3f})')
 
     # Write summary stats to CSV
     if all_metric_stats:
@@ -320,14 +319,14 @@ def calculate_statistics(csv_path: str, k: int = None):
         except IOError as e:
             print(f"Error writing to file `{output_filename}`: {e}", file=sys.stderr)
 
-    # Finalize ROC plot with flipped axes
-    plt.plot([0, 1], [1, 0], color='red', lw=1, linestyle='--', label='Random')
+    # Finalize the standard ROC plot
+    plt.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', label='Random (AUC = 0.5)')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
-    plt.xlabel('True Positive Rate (Recall)')
-    plt.ylabel('Specificity (1 - FPR)')
+    plt.xlabel('False Positive Rate (FPR)')
+    plt.ylabel('True Positive Rate (TPR / Recall)')
     plt.title(f'ROC Curves - {os.path.basename(csv_path)}')
-    plt.legend(loc="upper right")
+    plt.legend(loc="lower right")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -359,7 +358,8 @@ def calculate_statistics(csv_path: str, k: int = None):
         # Create single MAP heatmap with better layout
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-        # MAP heatmap with better color scheme
+        # MAP heatmap with red-to-green color scheme
+        # Low scores = red (bad), Medium = yellow, High scores = green (good)
         im = ax.imshow(map_matrix, cmap='RdYlGn', aspect='auto', vmin=0, vmax=1)
 
         # Set ticks and labels with better formatting
@@ -379,7 +379,8 @@ def calculate_statistics(csv_path: str, k: int = None):
             for j in range(len(metrics)):
                 value = map_matrix[i][j]
                 # Choose text color based on background brightness
-                text_color = "white" if value > 0.5 else "black"
+                # Black text works best for RdYlGn across most values
+                text_color = "black"
                 text = ax.text(j, i, f'{value:.3f}',
                               ha="center", va="center",
                               color=text_color,

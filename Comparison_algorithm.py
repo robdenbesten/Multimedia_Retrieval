@@ -98,7 +98,7 @@ def _chi_squared_hist(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _kl_hist(p: np.ndarray, q: np.ndarray) -> float:
-    return float(np.sum(p * np.log(p / (q + EPS) + EPS)))
+    return float(np.sum(p * np.log((p + EPS) / (q + EPS))))
 
 
 def _kl_sym_hist(a: np.ndarray, b: np.ndarray) -> float:
