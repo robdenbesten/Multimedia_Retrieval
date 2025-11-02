@@ -19,9 +19,9 @@ WEIGHTING_METHOD = 'feature'  # Options: 'feature' or 'neutral'
 # Default Configuration
 # -----------------------------
 MANUAL_WEIGHTS = {
-    'A3': 2.0, 'D1': 1.0, 'D2': 2.0, 'D3': 2.0, 'D4': 2.0,
-    'Surface area': 1.0, 'Sphericity': 1.0, 'Rectangularity': 1.0,
-    'Diameter': 1.0, 'Convexity': 1.0, 'Eccentricity': 1.0,
+    'A3': 9, 'D1': 6.0, 'D2': 3.1, 'D3': 2.5, 'D4': 0.5,
+    'Surface area': 0.3, 'Sphericity': 0.5, 'Rectangularity': 0.5,
+    'Diameter': 0.5, 'Convexity': 1.7, 'Eccentricity': 4.5,
 }
 
 
@@ -182,6 +182,24 @@ class ShapeSearcher:
     def get_available_labels(self) -> List[str]:
         return self.labels
 
+    def calculate_distance(self, index_a: int, index_b: int, metric: str) -> float:
+        """
+        Calculates the distance between two items specified by their indices.
+        This method is designed to be called from an external process, like ProcessPoolExecutor.
+        """
+        if metric not in self.metrics:
+            raise ValueError(f"Unknown metric: {metric}")
+        if metric == 'knn':
+            raise NotImplementedError("Distance matrix calculation is not supported for the 'knn' metric.")
+
+        vec_a = self.features[index_a]
+        vec_b = self.features[index_b]
+
+        if metric in COMPOSITE_METRICS:
+            return self._compute_composite_distance(vec_a, vec_b, metric)
+        else:
+            return self._compute_distance(vec_a, vec_b, metric)
+
     def search(self, query_label: str, metric: str, top_n: int = 5) -> List[str]:
         if query_label not in self.labels:
             raise ValueError(f"Query label '{query_label}' not found in dataset.")
@@ -193,13 +211,7 @@ class ShapeSearcher:
         if metric == 'knn':
             return self._search_knn(query_idx, top_n)
 
-        query_vec = self.features[query_idx]
-        if metric in COMPOSITE_METRICS:
-            dist_computer = self._compute_composite_distance
-        else:
-            dist_computer = self._compute_distance
-
-        dists = np.array([dist_computer(query_vec, vec, metric) for vec in self.features], dtype=float)
+        dists = np.array([self.calculate_distance(query_idx, i, metric) for i in range(len(self.labels))], dtype=float)
 
         sorted_indices = np.argsort(dists)
         results = [self.labels[i] for i in sorted_indices if i != query_idx]
@@ -236,17 +248,18 @@ class ShapeSearcher:
         return float(total_dist)
 
     def _compute_distance(self, vec_a: np.ndarray, vec_b: np.ndarray, metric: str) -> float:
-        groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
-        sub_weights = _normalize_weights(self.weights, groups, self.weighting_method)
-
-        # For neutral weighting, weights are uniform (1.0) so we can use the simple form.
+        # For neutral weighting, use the simple, unweighted form.
         if self.weighting_method == 'neutral':
             if metric == 'euclidean':
                 return _l2(vec_a, vec_b)
             if metric == 'manhattan':
                 return _l1(vec_a, vec_b)
 
-        # For weighted distance, expand group weights to all dimensions
+        # For 'feature' weighting, calculate and apply weights.
+        groups = HIST_KEYS if metric in HIST_ONLY_METRICS else FEATURE_GROUP_ORDER
+        sub_weights = _normalize_weights(self.weights, groups, self.weighting_method)
+
+        # Expand group weights to all dimensions for weighted calculation
         total_dim = vec_a.shape[0]
         per_dim_weights = _expand_group_weights_to_dims(sub_weights, groups, total_dim)
         diff = vec_a - vec_b
@@ -256,12 +269,15 @@ class ShapeSearcher:
         if metric == 'manhattan':
             return float(np.sum(per_dim_weights * np.abs(diff)))
 
-        # Fallback for other metrics if any, though they are mostly composite
-        dist_fn = DISTANCE_FUNCTIONS[metric]
-        total_dist = 0.0
-        for group in groups:
-            sl = GROUP_SLICES[group]
-            raw_dist = dist_fn(vec_a[sl], vec_b[sl])
-            total_dist += sub_weights[group] * raw_dist
+        # Fallback for other simple metrics (if any are added)
+        dist_fn = DISTANCE_FUNCTIONS.get(metric)
+        if dist_fn:
+             # This part is less efficient but handles generic cases
+            total_dist = 0.0
+            for group in groups:
+                sl = GROUP_SLICES[group]
+                raw_dist = dist_fn(vec_a[sl], vec_b[sl])
+                total_dist += sub_weights[group] * raw_dist
+            return float(total_dist)
 
-        return float(total_dist)
+        raise ValueError(f"Metric '{metric}' has no defined weighted calculation.")
