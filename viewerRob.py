@@ -51,7 +51,7 @@ class MeshViewer(QMainWindow):
             self.searcher = ShapeSearcher(
                 feature_csv_path=FEATURE_CSV,
                 weights=MANUAL_WEIGHTS,
-                weighting_method = 'neutral'  # or 'feature'
+                weighting_method = 'feature'  # or 'neutral'
             )
         except Exception as e:
             print(f"Failed to initialize searcher: {e}")
