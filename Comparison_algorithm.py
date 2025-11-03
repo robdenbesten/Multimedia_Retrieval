@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Tuple
 from sklearn.neighbors import NearestNeighbors
 
 # -----------------------------
@@ -165,7 +165,22 @@ class ShapeSearcher:
         self.weighting_method = weighting_method
         # include 'knn' as the high-dimensional k-NN metric
         self.metrics = list(DISTANCE_FUNCTIONS.keys()) + list(COMPOSITE_METRICS.keys()) + ['knn']
-        raw_features, self.labels = _load_dataset(feature_csv_path)
+
+        # Load raw features for display purposes
+        df = pd.read_csv(feature_csv_path, header=0, comment="#", engine="python")
+        feat_df = df.iloc[:, 2:].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+        # Create labels from category and object columns
+        categories = df["Category"].astype(str).to_numpy()
+        obj_ids = df["Object"].astype(str).to_numpy()
+        self.labels = [os.path.join(cat, obj).replace('\\', '/') for cat, obj in zip(categories, obj_ids)]
+
+        # Store features as DataFrame indexed by label for easy lookup
+        self.features_df = feat_df.copy()
+        self.features_df.index = self.labels
+
+        # Get normalized numpy features for distance calculations
+        raw_features = feat_df.to_numpy(dtype=np.float32)
         self.features = _normalize_features(raw_features)
 
         # --- k-NN pre-computation on high-dimensional features ---
@@ -201,6 +216,7 @@ class ShapeSearcher:
             return self._compute_distance(vec_a, vec_b, metric)
 
     def search(self, query_label: str, metric: str, top_n: int = 5) -> List[str]:
+        """Finds the top-N most similar objects to the query."""
         if query_label not in self.labels:
             raise ValueError(f"Query label '{query_label}' not found in dataset.")
         if metric not in self.metrics:
@@ -215,6 +231,37 @@ class ShapeSearcher:
 
         sorted_indices = np.argsort(dists)
         results = [self.labels[i] for i in sorted_indices if i != query_idx]
+
+        return results[:top_n]
+
+    def search_with_distances(self, query_label: str, metric: str, top_n: int = 5) -> List[Tuple[str, float]]:
+        """Finds the top-N most similar objects to the query and returns labels with distances."""
+        if query_label not in self.labels:
+            raise ValueError(f"Query label '{query_label}' not found in dataset.")
+        if metric not in self.metrics:
+            raise ValueError(f"Unknown metric: {metric}")
+
+        query_idx = self.labels.index(query_label)
+
+        if metric == 'knn':
+            # For kNN, we need to get distances as well
+            if self.knn_model is None:
+                raise RuntimeError("k-NN model is not available.")
+            query_vec_hd = self.features[query_idx].reshape(1, -1)
+            distances, indices = self.knn_model.kneighbors(query_vec_hd, n_neighbors=top_n + 1)
+            # Skip the first one (query itself)
+            neighbor_indices = indices.flatten()[1:]
+            neighbor_distances = distances.flatten()[1:]
+            return [(self.labels[i], float(d)) for i, d in zip(neighbor_indices, neighbor_distances)]
+
+        # Calculate distances for all objects
+        dists = np.array([self.calculate_distance(query_idx, i, metric) for i in range(len(self.labels))], dtype=float)
+
+        # Sort by distance
+        sorted_indices = np.argsort(dists)
+
+        # Build results excluding the query itself
+        results = [(self.labels[i], float(dists[i])) for i in sorted_indices if i != query_idx]
 
         return results[:top_n]
 

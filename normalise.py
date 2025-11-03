@@ -189,6 +189,9 @@ class Mesh:
     def vertex_count(self):
         return self.ms.current_mesh().vertex_number()
     
+    def face_count(self):
+        return self.ms.current_mesh().face_number()
+
 
 
 if __name__ == "__main__":

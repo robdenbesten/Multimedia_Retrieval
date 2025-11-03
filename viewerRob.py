@@ -3,8 +3,13 @@ import os
 import shutil
 import csv
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, QHBoxLayout,
-                             QWidget, QLabel, QComboBox, QListWidget, QCheckBox, QGridLayout)
+                             QWidget, QLabel, QComboBox, QListWidget, QCheckBox, QGridLayout,
+                             QScrollArea, QTextEdit)
 from PyQt6.QtCore import Qt
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load, Line, Axes
@@ -34,7 +39,9 @@ class MeshViewer(QMainWindow):
         self.edges = make_fixed_bin_edges(DEFAULT_BINS)
         self.searcher = None
         self.result_plotters = []
-        
+        self.result_labels = []  # Store result labels for dissimilarity display
+        self.current_features = None  # Store current mesh features
+
         self.init_searcher()
         self.init_ui()
 
@@ -91,6 +98,12 @@ class MeshViewer(QMainWindow):
         self.normalize_checkbox.setEnabled(False)
         control_layout.addWidget(self.normalize_checkbox)
 
+        # Show axes checkbox
+        self.show_axes_checkbox = QCheckBox('Show Axes')
+        self.show_axes_checkbox.setChecked(True)  # Axes visible by default
+        self.show_axes_checkbox.stateChanged.connect(self.toggle_axes_visibility)
+        control_layout.addWidget(self.show_axes_checkbox)
+
         # --- Search Controls ---
         control_layout.addWidget(QLabel('Search Metric:'))
         self.metric_dropdown = QComboBox()
@@ -103,29 +116,90 @@ class MeshViewer(QMainWindow):
         self.search_button.setEnabled(False)
         control_layout.addWidget(self.search_button)
 
-        # Right panel for viewers
-        viewer_panel = QWidget()
-        viewer_layout = QVBoxLayout(viewer_panel)
+        # Middle panel for main viewer and mesh info
+        middle_panel = QWidget()
+        middle_layout = QVBoxLayout(middle_panel)
+
+        # Mesh info label (vertices/faces) above main viewer
+        self.mesh_info_label = QLabel('Mesh Info: Load a mesh')
+        self.mesh_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mesh_info_label.setStyleSheet("font-weight: bold; font-size: 12px; padding: 5px;")
+        middle_layout.addWidget(self.mesh_info_label)
 
         # Main VTK Widget
-        self.vtk_widget = QVTKRenderWindowInteractor(viewer_panel)
+        self.vtk_widget = QVTKRenderWindowInteractor(middle_panel)
         self.plotter = Plotter(qt_widget=self.vtk_widget, N=1, bg='white')
-        viewer_layout.addWidget(self.vtk_widget, stretch=2)  # Give more space to main viewer
+        middle_layout.addWidget(self.vtk_widget, stretch=3)
 
-        # Results viewers
+        # Results viewers with dissimilarity labels
         results_widget = QWidget()
         results_layout = QGridLayout(results_widget)
+        results_layout.setSpacing(5)
+
+        self.result_labels = []
         for i in range(5):
-            vtk_res_widget = QVTKRenderWindowInteractor(results_widget)
+            # Create container for each result
+            result_container = QWidget()
+            result_container_layout = QVBoxLayout(result_container)
+            result_container_layout.setContentsMargins(0, 0, 0, 0)
+            result_container_layout.setSpacing(2)
+
+            # Dissimilarity label
+            dissim_label = QLabel(f'Result {i+1}')
+            dissim_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            dissim_label.setStyleSheet("font-size: 10px; font-weight: bold;")
+            result_container_layout.addWidget(dissim_label)
+            self.result_labels.append(dissim_label)
+
+            # VTK widget for result mesh
+            vtk_res_widget = QVTKRenderWindowInteractor(result_container)
             plot = Plotter(qt_widget=vtk_res_widget, N=1, bg='lightgrey')
             self.result_plotters.append(plot)
-            results_layout.addWidget(vtk_res_widget, 0, i)
-        viewer_layout.addWidget(results_widget, stretch=1)
-        
+            result_container_layout.addWidget(vtk_res_widget)
+
+            results_layout.addWidget(result_container, 0, i)
+
+        middle_layout.addWidget(results_widget, stretch=1)
+
+        # Right panel for feature visualization
+        feature_panel = QWidget()
+        feature_layout = QVBoxLayout(feature_panel)
+        feature_panel.setMaximumWidth(400)
+
+        feature_label = QLabel('Feature Visualization')
+        feature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        feature_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        feature_layout.addWidget(feature_label)
+
+        # Scroll area for features
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+
+        # Scalar features text display
+        self.scalar_features_text = QTextEdit()
+        self.scalar_features_text.setReadOnly(True)
+        self.scalar_features_text.setMaximumHeight(200)
+        self.scalar_features_text.setPlainText("Scalar Features:\nLoad a mesh to see features")
+        scroll_layout.addWidget(QLabel("Scalar Features:"))
+        scroll_layout.addWidget(self.scalar_features_text)
+
+        # Matplotlib canvas for histograms
+        self.feature_figure = Figure(figsize=(4, 8))
+        self.feature_canvas = FigureCanvas(self.feature_figure)
+        scroll_layout.addWidget(QLabel("Histogram Features:"))
+        scroll_layout.addWidget(self.feature_canvas)
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_content)
+        feature_layout.addWidget(scroll)
+
         # Add widgets to main layout
         main_layout.addWidget(control_panel)
-        main_layout.addWidget(viewer_panel)
-        
+        main_layout.addWidget(middle_panel, stretch=2)
+        main_layout.addWidget(feature_panel)
+
         # Add coordinate axes
         self.add_axes()
         
@@ -138,18 +212,30 @@ class MeshViewer(QMainWindow):
             self.search_button.setEnabled(False)
     
     def add_axes(self):
-        """Add coordinate axes to the viewer (X=red, Y=green, Z=blue)"""
-        x_axis = Line([0, 0, 0], [0.5, 0, 0]).c('red').lw(1)
-        y_axis = Line([0, 0, 0], [0, 0.5, 0]).c('green').lw(1)
-        z_axis = Line([0, 0, 0], [0, 0, 0.5]).c('blue').lw(1)
-        
-        # Store axes references
-        self.origin_axes = [x_axis, y_axis, z_axis]
-        
+        """Add coordinate axes to the viewer with labels and real values"""
+        # Create axes with vedo's Axes class for proper labeling
+        from vedo import Axes
+
+        # Create axes object with real-world scale
+        # The axes will auto-adjust to the mesh bounds when a mesh is loaded
+        # Vedo Axes uses xrange, yrange, zrange tuples and xtitle, ytitle, ztitle for labels
+        self.axes_object = Axes(
+            xrange=(-0.5, 0.5),
+            yrange=(-0.5, 0.5),
+            zrange=(-0.5, 0.5),
+            xtitle='X',
+            ytitle='Y',
+            ztitle='Z',
+            text_scale=1.2,
+            c='black',
+        )
+
+        # Store reference
+        self.origin_axes = self.axes_object
+
         # Add to plotter
-        for axis in self.origin_axes:
-            self.plotter.add(axis)
-        
+        self.plotter.add(self.axes_object)
+
     def load_categories(self):
         """Load all category folders from the database"""
         try:
@@ -229,7 +315,10 @@ class MeshViewer(QMainWindow):
                 #QApplication.processEvents()
                 #self.extract_features()
                 
-                # Step 5: Enable controls and finalize
+                # Step 5: Extract and display features
+                self.extract_and_display_features()
+
+                # Step 6: Enable controls and finalize
                 self.normalize_checkbox.setEnabled(True)
                 if self.searcher:
                     self.search_button.setEnabled(True)
@@ -261,22 +350,109 @@ class MeshViewer(QMainWindow):
         
         if self.show_normalized:
             state = 'Normalized'
-            # For normalized view, use the mesh_object vertex count (which is the normalized count)
-            v_count = self.mesh_object.vertex_count() if self.mesh_object else 'N/A'
+            # For normalized view, use the mesh_object vertex and face count
+            try:
+                v_count = self.mesh_object.vertex_count() if self.mesh_object else 'N/A'
+                f_count = self.mesh_object.face_count() if self.mesh_object else 'N/A'
+            except Exception as e:
+                print(f"Error getting normalized mesh counts: {e}")
+                v_count = 'N/A'
+                f_count = 'N/A'
         else:
             state = 'Original'
-            # For original view, load the original file to get its vertex count
+            # For original view, load the original file to get its vertex and face count
             try:
                 import trimesh
                 original_mesh = trimesh.load(self.current_file)
                 v_count = len(original_mesh.vertices)
-            except:
+                f_count = len(original_mesh.faces)
+            except Exception as e:
+                print(f"Error getting original mesh counts: {e}")
                 v_count = 'N/A'
-        
+                f_count = 'N/A'
+
         self.status_label.setText(f'{state} ({v_count} vertices):\n{os.path.basename(self.current_file)}')
+        self.mesh_info_label.setText(f'Vertices: {v_count} | Faces: {f_count}')
+
+    def extract_and_display_features(self):
+        """Extract features from the current mesh and display them."""
+        if not self.normalized_file or not os.path.exists(self.normalized_file):
+            return
+
+        try:
+            # Get category and object name for feature lookup
+            category = self.category_dropdown.currentText()
+            original_object_name = os.path.basename(self.current_file)
+            base_name = os.path.splitext(original_object_name)[0]
+            normalized_object_name = f"{base_name}_rm.obj"
+            query_label = os.path.join(category, normalized_object_name).replace('\\', '/')
+
+            # Get features from the searcher's database
+            if self.searcher and query_label in self.searcher.features_df.index:
+                features = self.searcher.features_df.loc[query_label]
+                self.current_features = features
+
+                # Display scalar features
+                scalar_names = ['Surface area', 'Sphericity', 'Rectangularity',
+                               'Diameter', 'Convexity', 'Eccentricity']
+                scalar_text = "Scalar Features:\n" + "="*30 + "\n"
+                for name in scalar_names:
+                    if name in features.index:
+                        scalar_text += f"{name:20s}: {features[name]:.4f}\n"
+                self.scalar_features_text.setPlainText(scalar_text)
+
+                # Display histogram features
+                self.display_histograms(features)
+            else:
+                self.scalar_features_text.setPlainText(f"Features not found for:\n{query_label}")
+
+        except Exception as e:
+            print(f"Error extracting features: {e}")
+            self.scalar_features_text.setPlainText(f"Error extracting features:\n{e}")
+
+    def toggle_axes_visibility(self):
+        """Toggle the visibility of coordinate axes"""
+        if self.origin_axes:
+            if self.show_axes_checkbox.isChecked():
+                self.plotter.add(self.origin_axes)
+            else:
+                self.plotter.remove(self.origin_axes)
+            self.plotter.render()
+
+    def display_histograms(self, features):
+        """Display histogram features as bar charts."""
+        try:
+            self.feature_figure.clear()
+
+            hist_descriptors = ['A3', 'D1', 'D2', 'D3', 'D4']
+            n_bins = 20
+
+            for idx, desc in enumerate(hist_descriptors):
+                ax = self.feature_figure.add_subplot(5, 1, idx + 1)
+
+                # Extract histogram bins for this descriptor
+                bin_cols = [f'{desc}_bin_{i}' for i in range(n_bins)]
+                hist_values = [features[col] if col in features.index else 0 for col in bin_cols]
+
+                # Plot histogram
+                ax.bar(range(n_bins), hist_values, color='steelblue', edgecolor='black', linewidth=0.5)
+                ax.set_title(desc, fontsize=10, fontweight='bold')
+                ax.set_xlim(-0.5, n_bins - 0.5)
+                ax.set_ylim(0, max(hist_values) * 1.1 if max(hist_values) > 0 else 1)
+                ax.set_ylabel('Frequency', fontsize=8)
+                if idx == len(hist_descriptors) - 1:
+                    ax.set_xlabel('Bin', fontsize=8)
+                ax.tick_params(labelsize=7)
+                ax.grid(axis='y', alpha=0.3)
+
+            self.feature_figure.tight_layout()
+            self.feature_canvas.draw()
+
+        except Exception as e:
+            print(f"Error displaying histograms: {e}")
 
     def find_similar_shapes(self):
-        """Performs search and displays the top 5 results."""
+        """Performs search and displays the top 5 results with dissimilarity values."""
         if not self.searcher or not self.current_file:
             self.status_label.setText("Searcher not ready or no mesh loaded.")
             return
@@ -296,18 +472,22 @@ class MeshViewer(QMainWindow):
         QApplication.processEvents()
 
         try:
-            results = self.searcher.search(query_label=query_label, metric=metric, top_n=5)
+            # Get search results with distances
+            results_with_distances = self.searcher.search_with_distances(
+                query_label=query_label, metric=metric, top_n=5
+            )
 
             # Use normalized database for displaying results since feature matrix is based on normalized objects
             normalized_db_location = r'Normalised-objects'
             
-            for i, res_label in enumerate(results):
+            for i, (res_label, distance) in enumerate(results_with_distances):
                 res_path = os.path.join(normalized_db_location, res_label)
-                self.display_result_mesh(res_path, i)
+                self.display_result_mesh(res_path, i, distance)
 
             # Clear remaining result plotters if less than 5 results found
-            for i in range(len(results), 5):
+            for i in range(len(results_with_distances), 5):
                 self.result_plotters[i].clear().render()
+                self.result_labels[i].setText(f'Result {i+1}')
 
             self.status_label.setText(f"Top 5 results for {original_object_name}")
 
@@ -321,8 +501,8 @@ class MeshViewer(QMainWindow):
         except Exception as e:
             self.status_label.setText(f"An unexpected error occurred: {e}")
 
-    def display_result_mesh(self, file_path, index):
-        """Displays a result mesh in one of the five small viewers."""
+    def display_result_mesh(self, file_path, index, dissimilarity=None):
+        """Displays a result mesh in one of the five small viewers with dissimilarity value."""
         if index >= len(self.result_plotters):
             return
         try:
@@ -330,6 +510,13 @@ class MeshViewer(QMainWindow):
             plot.clear()
             mesh = load(file_path).lighting('default').linecolor('black').linewidth(0.5)
             plot.show(mesh, resetcam=True)
+
+            # Update label with dissimilarity value
+            if dissimilarity is not None:
+                obj_name = os.path.basename(file_path)
+                self.result_labels[index].setText(f'{obj_name}\nDissimilarity: {dissimilarity:.4f}')
+            else:
+                self.result_labels[index].setText(f'Result {index+1}')
         except Exception as e:
             print(f"Error displaying result mesh {file_path}: {e}")
 
@@ -397,10 +584,10 @@ class MeshViewer(QMainWindow):
         try:
             self.plotter.clear()
             
-            # Re-add origin axes
-            for axis in self.origin_axes:
-                self.plotter.add(axis)
-            
+            # Re-add origin axes if they should be shown
+            if self.show_axes_checkbox.isChecked() and self.origin_axes:
+                self.plotter.add(self.origin_axes)
+
             mesh = load(file_path).lighting('default').linecolor('black').linewidth(1)
             self.plotter.show(mesh, resetcam=True)
         except Exception as e:
