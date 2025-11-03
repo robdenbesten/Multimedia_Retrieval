@@ -50,7 +50,10 @@ def generate_retrieval_results_wide_format():
      with open(out_path, 'w', newline='', encoding='utf-8') as f:
          writer = csv.writer(f)
          header = ['query_label', 'query_category', 'metric']
-         header.extend([f'retrieved_cat_rank_{i}' for i in range(1, max_comparisons + 1)])
+         # Add both category and distance columns for each rank
+         for i in range(1, max_comparisons + 1):
+             header.append(f'retrieved_cat_rank_{i}')
+             header.append(f'distance_rank_{i}')
          writer.writerow(header)
 
          for i, query_label in enumerate(labels):
@@ -65,17 +68,29 @@ def generate_retrieval_results_wide_format():
                  # Request a few extra to ensure we can exclude the query if returned
                  request_n = n_comparisons + 1 if n_comparisons > 0 else 0
                  neighbors = []
+                 distances = []
                  if request_n > 0:
-                     raw_neighbors = searcher.search(query_label, metric, top_n=request_n)
+                     # Use search_with_distances to get both labels and distances
+                     raw_results = searcher.search_with_distances(query_label, metric, top_n=request_n)
                      # Exclude the query itself if present and then trim to n_comparisons
-                     neighbors = [lbl for lbl in raw_neighbors if lbl != query_label][:n_comparisons]
+                     filtered_results = [(lbl, dist) for lbl, dist in raw_results if lbl != query_label][:n_comparisons]
+                     neighbors = [lbl for lbl, _ in filtered_results]
+                     distances = [dist for _, dist in filtered_results]
 
                  # Map neighbors to categories
                  retrieved_categories = [category_from_label(lbl) for lbl in neighbors]
-                 # Pad to max_comparisons so all rows have same columns
-                 retrieved_categories += [''] * (max_comparisons - len(retrieved_categories))
 
-                 row = [query_label, query_category, metric] + retrieved_categories
+                 # Build row with interleaved category and distance values
+                 row = [query_label, query_category, metric]
+                 for j in range(max_comparisons):
+                     if j < len(retrieved_categories):
+                         row.append(retrieved_categories[j])
+                         row.append(distances[j])
+                     else:
+                         # Pad with empty category and empty distance
+                         row.append('')
+                         row.append('')
+
                  writer.writerow(row)
 
      print(f'\nDetailed retrieval results have been written to `{out_path}`.')

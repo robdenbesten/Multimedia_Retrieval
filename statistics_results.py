@@ -14,6 +14,7 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
     Each category contributes equally to the final metrics regardless of size.
     """
     rank_re = re.compile(r'retrieved_cat_rank_(\d+)$')
+    dist_re = re.compile(r'distance_rank_(\d+)$')
 
     # Group queries by category
     queries_by_category = defaultdict(list)
@@ -24,7 +25,7 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
 
     if not queries_by_category:
         print(f"No valid queries found for metric '{metric_name}'.")
-        return None, None, 0.0, {}
+        return {}, {}
 
     # Store per-category results
     category_results = {}
@@ -55,15 +56,34 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
         }
 
         for row in category_queries:
-            # Parse retrieved columns
+            # Parse retrieved category columns
             retrieved_cols = [col for col in row.keys() if rank_re.match(col)]
             retrieved_cols.sort(key=lambda c: int(rank_re.match(c).group(1)))
             retrieved_cats = [row[col].strip() if row[col] else '' for col in retrieved_cols]
 
-            # Filter non-empty results
-            non_empty = [c for c in retrieved_cats if c != '']
+            # Parse distance columns
+            distance_cols = [col for col in row.keys() if dist_re.match(col)]
+            distance_cols.sort(key=lambda c: int(dist_re.match(c).group(1)))
+            retrieved_dists = []
+            for col in distance_cols:
+                val = row[col].strip() if row[col] else ''
+                if val:
+                    try:
+                        retrieved_dists.append(float(val))
+                    except ValueError:
+                        retrieved_dists.append(float('inf'))  # Invalid distance
+                else:
+                    retrieved_dists.append(float('inf'))
+
+            # Filter non-empty results (both category and distance must be valid)
+            non_empty_indices = [i for i, c in enumerate(retrieved_cats) if c != '']
+            retrieved_top_k = [retrieved_cats[i] for i in non_empty_indices]
+            distances_top_k = [retrieved_dists[i] for i in non_empty_indices if i < len(retrieved_dists)]
+
             # Use eval_k if specified, otherwise use all retrieved items
-            retrieved_top_k = non_empty[:eval_k] if eval_k is not None else non_empty
+            if eval_k is not None:
+                retrieved_top_k = retrieved_top_k[:eval_k]
+                distances_top_k = distances_top_k[:eval_k]
 
             if not retrieved_top_k:
                 continue
@@ -90,9 +110,9 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
             category_stats['recalls'].append(recall)
 
             # Average Precision (AP) for this query
-            # AP = (sum of precision@k for each relevant item retrieved) / (number of relevant items considered)
-            # When k is specified: divide by min(k, N) since we only evaluate top-k
-            # When k is None: divide by N (all relevant items)
+            # AP = (sum of precision@i for each relevant item retrieved) / (number of relevant items found)
+            # CORRECTED: The denominator should be the actual number of relevant items retrieved,
+            # not min(k, N). This properly reflects the average precision of the retrieved relevant items.
             ap_sum = 0.0
             num_relevant_found = 0
             for i, cat in enumerate(retrieved_top_k, start=1):
@@ -103,12 +123,13 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
                     precision_at_i = tp_at_i / i
                     ap_sum += precision_at_i
 
-            # Determine denominator for AP calculation
+            # FIXED: Determine denominator for AP calculation
             if eval_k is not None:
-                # Top-k evaluation: normalize by min(k, N) since we can't retrieve more than k items
-                ap_denominator = min(eval_k, N) if N > 0 else 1
+                # Top-k evaluation: divide by number of relevant items actually found in top-k
+                # This correctly measures the average precision of retrieved relevant items
+                ap_denominator = num_relevant_found if num_relevant_found > 0 else 1
             else:
-                # Full retrieval: normalize by total relevant items N
+                # Full retrieval: divide by total relevant items N (assumes all can be retrieved)
                 ap_denominator = N if N > 0 else 1
 
             ap = ap_sum / ap_denominator if ap_denominator > 0 else 0.0
@@ -127,10 +148,14 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
                     break
             category_stats['last_ranks'].append(last_rank)
 
-            # ROC data: collect predictions for each retrieved item (for ROC curve plotting)
+            # ROC data: collect predictions using actual distances
+            # Lower distance = more similar = higher score for positive class
+            # We use negative distance as the score (so higher score = more similar)
             for i, cat in enumerate(retrieved_top_k):
-                category_stats['y_true'].append(1 if cat == category else 0)
-                category_stats['y_scores'].append(1.0 / (i + 1))  # Higher rank = higher score
+                if i < len(distances_top_k):
+                    category_stats['y_true'].append(1 if cat == category else 0)
+                    # Use negative distance as score: lower distance = higher score = more likely positive
+                    category_stats['y_scores'].append(-distances_top_k[i])
 
         # Aggregate per-category metrics
         num_queries = len(category_queries)
@@ -184,11 +209,12 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
     accuracy = (total_tp + total_tn) / total_population if total_population > 0 else 0.0
     specificity = total_tn / (total_tn + total_fp) if (total_tn + total_fp) > 0 else 0.0
 
-    # ROC curve computation: aggregate all predictions across queries
+    # ROC curve computation: aggregate all predictions across queries using actual distances
     fpr, tpr, roc_auc = None, None, 0.0
     if all_y_true and all_y_scores:
         try:
             # Compute ROC curve: TPR (sensitivity) vs FPR (1 - specificity)
+            # y_scores contains negative distances (higher = more similar)
             fpr, tpr, _ = roc_curve(all_y_true, all_y_scores)
             roc_auc = auc(fpr, tpr)
         except Exception as e:
@@ -334,7 +360,7 @@ def calculate_statistics(csv_path: str, k: int = None):
         except IOError as e:
             print(f"Error writing to file `{output_filename}`: {e}", file=sys.stderr)
 
-    # Plot ROC curves (Specificity vs Sensitivity)
+    # Plot ROC curves (Specificity vs Sensitivity style - rotated ROC)
     if roc_data:
         plt.figure(figsize=(10, 10))
 
@@ -343,7 +369,7 @@ def calculate_statistics(csv_path: str, k: int = None):
             specificity = 1 - fpr
             plt.plot(tpr, specificity, lw=2, label=f'{metric} (AUC = {roc_auc:.3f})')
 
-        # Plot random baseline (diagonal from bottom-left to top-right)
+        # Plot random baseline (diagonal from (0,1) to (1,0))
         plt.plot([0, 1], [1, 0], color='red', lw=1, linestyle='--', label='Random (AUC = 0.5)')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])

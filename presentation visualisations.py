@@ -245,6 +245,141 @@ def plot_feature_weights(folder):
     plt.close()
 
 
+def plot_weighted_results_table(folder):
+    """F. Display weighted results in a clean table format."""
+    # Read data from CSV file
+    csv_path = Path('stats_results_weighted.csv')
+    if not csv_path.exists():
+        print(f"! Skipping weighted results table: {csv_path} not found.")
+        return
+
+    weighted_df = pd.read_csv(csv_path)
+
+    # Define metric order and display names
+    metric_order = ['manhattan', 'manhattan+kullback-leibler', 'manhattan+chi-squared', 'manhattan+emd', 'euclidean']
+    metric_display_names = {
+        'manhattan': 'Manhattan',
+        'manhattan+kullback-leibler': '+Kullback-Leibler',
+        'manhattan+chi-squared': '+Chi-Squared',
+        'manhattan+emd': '+EMD',
+        'euclidean': 'Euclidean'
+    }
+
+    # Filter and order the data
+    weighted_df = weighted_df[weighted_df['Metric'].isin(metric_order)]
+    weighted_df['Metric'] = pd.Categorical(weighted_df['Metric'], categories=metric_order, ordered=True)
+    weighted_df = weighted_df.sort_values('Metric')
+
+    # Extract the metrics we want to display
+    data = {
+        'Metric': ['MAP', 'F1', 'AUC', '1st Tier Acc.', 'Avg. Last Rank']
+    }
+
+    for _, row in weighted_df.iterrows():
+        metric_name = metric_display_names[row['Metric']]
+        data[metric_name] = [
+            float(row['Macro_MAP']),
+            float(row['Macro_F1']),
+            float(row['ROC_AUC']),
+            float(row['Macro_First_Tier']),
+            float(row['Macro_Avg_Last_Rank'])
+        ]
+
+    df = pd.DataFrame(data)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.axis('tight')
+    ax.axis('off')
+
+    # Colors
+    ORANGE_HEADER = '#cf5230'
+    WHITE = '#FFFFFF'
+    LIGHT_ORANGE = '#FFFFFF'
+
+    # Format the data to 4 decimal places for display
+    formatted_data = df.copy()
+    for col in df.columns[1:]:
+        formatted_data[col] = df[col].apply(lambda x: f'{x:.4f}')
+
+    # Define soft colors for highlighting
+    SOFT_GREEN = '#D4EDDA'
+    SOFT_RED = '#F8D7DA'
+
+    # Create cell colors - highlight min/max per row
+    cell_colors = []
+    for idx in range(len(df)):
+        row_colors = []
+        # First column (Metric name) - same orange as header
+        row_colors.append(ORANGE_HEADER)
+
+        # For value columns, find min and max
+        row_values = df.iloc[idx, 1:].values  # Skip first column (Metric names)
+        max_val = max(row_values)
+        min_val = min(row_values)
+
+        for val in row_values:
+            if val == max_val:
+                row_colors.append(SOFT_GREEN)  # Highest value = green
+            elif val == min_val:
+                row_colors.append(SOFT_RED)    # Lowest value = red
+            else:
+                # Alternating background for middle values
+                if idx % 2 == 0:
+                    row_colors.append(WHITE)
+                else:
+                    row_colors.append(LIGHT_ORANGE)
+
+        cell_colors.append(row_colors)
+
+    # Column header colors
+    col_colors = [ORANGE_HEADER] * len(df.columns)
+
+    # Create the table
+    table = ax.table(cellText=formatted_data.values, colLabels=df.columns,
+                     cellLoc='center', loc='center',
+                     cellColours=cell_colors,
+                     colColours=col_colors)
+
+    # Style the table
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 2.5)
+
+    # Style header row
+    for i in range(len(df.columns)):
+        cell = table[(0, i)]
+        cell.set_text_props(weight='bold', color='white', size=12)
+        cell.set_edgecolor('#333333')
+        cell.set_linewidth(1.5)
+
+    # Style data cells
+    for i in range(1, len(df) + 1):
+        for j in range(len(df.columns)):
+            cell = table[(i, j)]
+            cell.set_edgecolor('#333333')
+            cell.set_linewidth(1.5)
+
+            if j == 0:
+                # Metric names - left aligned and bold with white text on orange background
+                cell.set_text_props(weight='bold', ha='left', color='white', size=11)
+            else:
+                # Values - centered and bold
+                cell.set_text_props(weight='bold', color='#333333', size=11)
+
+    plt.title('Weighted Results Comparison',
+              fontsize=15, fontweight='bold', pad=20, color='#333333')
+
+    # Add annotation
+    annotation = "Performance metrics for different distance functions with adjusted feature weights"
+    plt.figtext(0.5, 0.02, annotation, ha='center', fontsize=10,
+                style='italic', color='#666666')
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.savefig(folder / 'F_weighted_results_table.png', dpi=300, bbox_inches='tight')
+    print("✓ Weighted results table saved as 'F_weighted_results_table.png'")
+    plt.close()
+
 def plot_adjusted_metrics_comparison(neutral_df, adjusted_df, folder):
     """D. Plot comparison of neutral vs adjusted Manhattan and composite metrics.
 
@@ -714,6 +849,17 @@ def main():
         f.write("=" * 80 + "\n")
 
     prove_knn_euclidean_equivalence(neutral_df, presentation_folder)
+
+    print("\n" + "=" * 80)
+    print("GENERATING NEW PRESENTATION PLOTS...")
+    print("=" * 80)
+    plot_neutral_euclidean_vs_manhattan(neutral_df, presentation_folder)
+    plot_manhattan_variations(neutral_df_raw, presentation_folder)
+    plot_feature_weights(presentation_folder)
+    plot_adjusted_metrics_comparison(neutral_df_raw, adjusted_df_raw, presentation_folder)
+    prove_knn_euclidean_equivalence(neutral_df_raw, presentation_folder)
+    plot_weighted_results_table(presentation_folder)  # ← ADD THIS LINE
+    print("-" * 80)
 
     print("\n" + "=" * 80)
     print("ALL PRESENTATION MATERIALS GENERATED SUCCESSFULLY!")
