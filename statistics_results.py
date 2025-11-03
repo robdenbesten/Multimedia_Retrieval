@@ -90,13 +90,28 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
             category_stats['recalls'].append(recall)
 
             # Average Precision (AP) for this query
-            precision_at_i = []
-            for i in range(1, len(retrieved_top_k) + 1):
-                tp_at_i = sum(1 for cat in retrieved_top_k[:i] if cat == category)
-                precision_at_i.append(tp_at_i / i)
+            # AP = (sum of precision@k for each relevant item retrieved) / (number of relevant items considered)
+            # When k is specified: divide by min(k, N) since we only evaluate top-k
+            # When k is None: divide by N (all relevant items)
+            ap_sum = 0.0
+            num_relevant_found = 0
+            for i, cat in enumerate(retrieved_top_k, start=1):
+                if cat == category:
+                    num_relevant_found += 1
+                    # Count relevant items up to position i
+                    tp_at_i = sum(1 for c in retrieved_top_k[:i] if c == category)
+                    precision_at_i = tp_at_i / i
+                    ap_sum += precision_at_i
 
-            ap_numerator = sum(p for p, cat in zip(precision_at_i, retrieved_top_k) if cat == category)
-            ap = ap_numerator / N if N > 0 else 0.0
+            # Determine denominator for AP calculation
+            if eval_k is not None:
+                # Top-k evaluation: normalize by min(k, N) since we can't retrieve more than k items
+                ap_denominator = min(eval_k, N) if N > 0 else 1
+            else:
+                # Full retrieval: normalize by total relevant items N
+                ap_denominator = N if N > 0 else 1
+
+            ap = ap_sum / ap_denominator if ap_denominator > 0 else 0.0
             category_stats['aps'].append(ap)
 
             # First tier accuracy
@@ -112,10 +127,10 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
                     break
             category_stats['last_ranks'].append(last_rank)
 
-            # ROC data (per-item scores using inverse rank)
+            # ROC data: collect predictions for each retrieved item (for ROC curve plotting)
             for i, cat in enumerate(retrieved_top_k):
                 category_stats['y_true'].append(1 if cat == category else 0)
-                category_stats['y_scores'].append(1.0 / (i + 1))
+                category_stats['y_scores'].append(1.0 / (i + 1))  # Higher rank = higher score
 
         # Aggregate per-category metrics
         num_queries = len(category_queries)
@@ -134,6 +149,7 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
                 'avg_FN': category_stats['FN'] / num_queries,
             }
 
+            # Store all predictions for ROC curve
             all_y_true.extend(category_stats['y_true'])
             all_y_scores.extend(category_stats['y_scores'])
 
@@ -168,10 +184,11 @@ def calculate_statistics_for_metric(metric_name: str, query_data: list, category
     accuracy = (total_tp + total_tn) / total_population if total_population > 0 else 0.0
     specificity = total_tn / (total_tn + total_fp) if (total_tn + total_fp) > 0 else 0.0
 
-    # ROC curve (using all retrieved items)
+    # ROC curve computation: aggregate all predictions across queries
     fpr, tpr, roc_auc = None, None, 0.0
     if all_y_true and all_y_scores:
         try:
+            # Compute ROC curve: TPR (sensitivity) vs FPR (1 - specificity)
             fpr, tpr, _ = roc_curve(all_y_true, all_y_scores)
             roc_auc = auc(fpr, tpr)
         except Exception as e:
@@ -282,8 +299,8 @@ def calculate_statistics(csv_path: str, k: int = None):
     metric_data = {metric: [row for row in all_rows if row.get('metric', '').strip() == metric] for metric in metrics}
 
     # Calculate statistics for each metric
-    plt.figure(figsize=(10, 10))
     all_metric_stats = []
+    roc_data = []  # Store ROC curve data (fpr, tpr, auc) for plotting
 
     # Store per-category results for heatmap
     category_performance = {}  # {metric: {category: {'map': x, 'f1': y, 'precision': z, 'recall': w}}}
@@ -297,14 +314,12 @@ def calculate_statistics(csv_path: str, k: int = None):
         )
         if stats_dict:
             all_metric_stats.append(stats_dict)
+            if fpr is not None and tpr is not None and roc_auc > 0:
+                roc_data.append((metric, fpr, tpr, roc_auc))
 
         # Store category-level results for heatmap
         if category_results:
             category_performance[metric] = category_results
-
-        if fpr is not None and tpr is not None and roc_auc > 0:
-            # Plot a standard ROC curve: TPR vs FPR
-            plt.plot(fpr, tpr, lw=2, label=f'{metric} (AUC = {roc_auc:.3f})')
 
     # Write summary stats to CSV
     if all_metric_stats:
@@ -319,17 +334,26 @@ def calculate_statistics(csv_path: str, k: int = None):
         except IOError as e:
             print(f"Error writing to file `{output_filename}`: {e}", file=sys.stderr)
 
-    # Finalize the standard ROC plot
-    plt.plot([0, 1], [0, 1], color='red', lw=1, linestyle='--', label='Random (AUC = 0.5)')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate (FPR)')
-    plt.ylabel('True Positive Rate (TPR / Recall)')
-    plt.title(f'ROC Curves - {os.path.basename(csv_path)}')
-    plt.legend(loc="lower right")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+    # Plot ROC curves (Specificity vs Sensitivity)
+    if roc_data:
+        plt.figure(figsize=(10, 10))
+
+        for metric, fpr, tpr, roc_auc in roc_data:
+            # Plot ROC curve: Specificity (1-FPR) on y-axis vs Sensitivity (TPR) on x-axis
+            specificity = 1 - fpr
+            plt.plot(tpr, specificity, lw=2, label=f'{metric} (AUC = {roc_auc:.3f})')
+
+        # Plot random baseline (diagonal from bottom-left to top-right)
+        plt.plot([0, 1], [1, 0], color='red', lw=1, linestyle='--', label='Random (AUC = 0.5)')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('Sensitivity (True Positive Rate)', fontweight='bold', fontsize=12)
+        plt.ylabel('Specificity (True Negative Rate)', fontweight='bold', fontsize=12)
+        plt.title(f'ROC Curves - {os.path.basename(csv_path)}', fontweight='bold', fontsize=14)
+        plt.legend(loc="lower left", fontsize=10)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
 
     # Generate heatmap for per-category MAP performance
     if category_performance:
@@ -339,64 +363,60 @@ def calculate_statistics(csv_path: str, k: int = None):
             for cat in metric_cats.keys()
         )))
 
-        # Build MAP matrix (rows = categories, columns = metrics)
-        map_matrix = []
+        # Build Precision matrix (rows = categories, columns = metrics)
+        precision_matrix = []
         for category in all_categories:
-            map_row = []
+            precision_row = []
             for metric in metrics:
                 if category in category_performance.get(metric, {}):
                     cat_data = category_performance[metric][category]
-                    map_row.append(cat_data['map'])
+                    precision_row.append(cat_data['precision'])
                 else:
-                    map_row.append(0.0)
-            map_matrix.append(map_row)
+                    precision_row.append(0.0)
+            precision_matrix.append(precision_row)
 
         # Calculate figure size based on content
-        # For single metric, use smaller width; for multiple metrics, scale appropriately
-        if len(metrics) == 1:
-            fig_width = 10
-        else:
-            fig_width = max(12, int(len(metrics) * 2.5))
+        fig_width = max(14, len(metrics) * 2.0)
+        fig_height = max(10, len(all_categories) * 0.6)
 
-        # Height scales with number of categories (0.35 per category, min 12)
-        fig_height = max(12, int(len(all_categories) * 0.35))
+        # Create single Precision heatmap with better layout
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-        # Create single MAP heatmap with better layout - use constrained_layout to prevent label cutoff
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
+        # Adjust subplot to make room for labels
+        plt.subplots_adjust(left=0.2, right=0.95, top=0.92, bottom=0.15)
 
-        # MAP heatmap with red-to-green color scheme
+        # Precision heatmap with red-to-green color scheme
         # Low scores = red (bad), Medium = yellow, High scores = green (good)
-        im = ax.imshow(map_matrix, cmap='RdYlGn', aspect='auto', vmin=0, vmax=1)
+        im = ax.imshow(precision_matrix, cmap='RdYlGn', aspect='auto', vmin=0, vmax=1)
 
         # Set ticks and labels with better formatting
         ax.set_xticks(np.arange(len(metrics)))
         ax.set_yticks(np.arange(len(all_categories)))
-        ax.set_xticklabels(metrics, rotation=0 if len(metrics) == 1 else 45,
-                          ha='center' if len(metrics) == 1 else 'right', fontsize=12)
+        ax.set_xticklabels(metrics, rotation=45, ha='right', fontsize=10)
         ax.set_yticklabels(all_categories, fontsize=9)
 
         # Add title and labels
-        ax.set_title(f'Mean Average Precision (MAP) per Category\n{os.path.basename(csv_path)}',
-                     fontsize=16, fontweight='bold', pad=20)
-        ax.set_xlabel('Distance Metric', fontsize=13, fontweight='bold', labelpad=10)
-        ax.set_ylabel('Category', fontsize=13, fontweight='bold', labelpad=10)
+        ax.set_title(f'Average Precision per Category\n{os.path.basename(csv_path)}',
+                     fontsize=14, fontweight='bold', pad=15)
+        ax.set_xlabel('Distance Metric', fontsize=12, fontweight='bold', labelpad=10)
+        ax.set_ylabel('Category', fontsize=12, fontweight='bold', labelpad=10)
 
         # Add text annotations with better visibility
         for i in range(len(all_categories)):
             for j in range(len(metrics)):
-                value = map_matrix[i][j]
+                value = precision_matrix[i][j]
                 # Choose text color based on background brightness
                 # Black text works best for RdYlGn across most values
                 text_color = "black"
                 text = ax.text(j, i, f'{value:.3f}',
                               ha="center", va="center",
                               color=text_color,
-                              fontsize=10,
+                              fontsize=9,
                               fontweight='bold')
 
         # Add colorbar with better formatting
         cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label('MAP Score', rotation=270, labelpad=25, fontsize=12, fontweight='bold')
+        cbar.set_label('Precision Score', rotation=270, labelpad=25, fontsize=12, fontweight='bold')
         cbar.ax.tick_params(labelsize=10)
 
         # Add grid for better readability
@@ -405,7 +425,6 @@ def calculate_statistics(csv_path: str, k: int = None):
         ax.grid(which="minor", color="gray", linestyle='-', linewidth=0.5)
         ax.tick_params(which="minor", size=0)
 
-        # Don't use tight_layout since we're using constrained_layout
         plt.show()
 
 if __name__ == '__main__':

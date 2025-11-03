@@ -91,6 +91,118 @@ def plot_manhattan_variations(neutral_df, folder):
     plt.close()
 
 
+def prove_knn_euclidean_equivalence(neutral_df, folder):
+    """E. Prove that k-NN and Euclidean with neutral weights are equivalent."""
+
+    # Extract the two metrics
+    knn_data = neutral_df[neutral_df['Metric'] == 'knn']
+    euclidean_data = neutral_df[neutral_df['Metric'] == 'euclidean']
+
+    if len(knn_data) == 0 or len(euclidean_data) == 0:
+        print("! Skipping proof: k-NN or Euclidean data not found in neutral results.")
+        return
+
+    knn_row = knn_data.iloc[0]
+    euclidean_row = euclidean_data.iloc[0]
+
+    # Metrics to compare
+    metrics_to_compare = ['Macro_Precision', 'Macro_Recall', 'Macro_F1',
+                          'Macro_MAP', 'Macro_First_Tier', 'ROC_AUC']
+
+    # Calculate differences
+    differences = []
+    for metric in metrics_to_compare:
+        knn_val = knn_row[metric]
+        euclidean_val = euclidean_row[metric]
+        diff = abs(knn_val - euclidean_val)
+        differences.append({
+            'Metric': metric.replace('_', ' '),
+            'k-NN': f'{knn_val:.6f}',
+            'Euclidean': f'{euclidean_val:.6f}',
+            'Absolute Difference': f'{diff:.6f}'
+        })
+
+    df = pd.DataFrame(differences)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.axis('tight')
+    ax.axis('off')
+
+    # Colors
+    ORANGE_HEADER = '#cf5230'
+    WHITE = '#FFFFFF'
+    LIGHT_GREEN = '#D4EDDA'
+
+    # Create cell colors - highlight if difference is essentially zero
+    cell_colors = []
+    for idx in range(len(df)):
+        diff_val = float(df.iloc[idx]['Absolute Difference'])
+        # If difference is < 0.0001, highlight in green
+        if diff_val < 0.0001:
+            cell_colors.append([WHITE, WHITE, WHITE, LIGHT_GREEN])
+        else:
+            cell_colors.append([WHITE, WHITE, WHITE, WHITE])
+
+    # Column header colors
+    col_colors = [ORANGE_HEADER] * 4
+
+    # Create the table
+    table = ax.table(cellText=df.values, colLabels=df.columns,
+                     cellLoc='center', loc='center',
+                     cellColours=cell_colors,
+                     colColours=col_colors)
+
+    # Style the table
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 2.5)
+
+    # Style header row
+    for i in range(len(df.columns)):
+        cell = table[(0, i)]
+        cell.set_text_props(weight='bold', color='white', size=12)
+        cell.set_edgecolor('#333333')
+        cell.set_linewidth(1.5)
+
+    # Style data cells
+    for i in range(1, len(df) + 1):
+        for j in range(len(df.columns)):
+            cell = table[(i, j)]
+            cell.set_edgecolor('#333333')
+            cell.set_linewidth(1.5)
+            cell.set_text_props(weight='bold', color='#333333', size=11)
+
+            if j == 0:
+                # Metric names - left aligned
+                cell.set_text_props(ha='left')
+
+    plt.title('Proof: k-NN ≡ Euclidean Distance (Neutral Weights)',
+              fontsize=15, fontweight='bold', pad=20, color='#333333')
+
+    # Add annotation
+    max_diff = df['Absolute Difference'].astype(float).max()
+    annotation = f"Maximum absolute difference: {max_diff:.6f}\n"
+    annotation += "Green highlighting indicates differences < 0.0001 (effectively identical)"
+
+    plt.figtext(0.5, 0.02, annotation, ha='center', fontsize=10,
+                style='italic', color='#666666')
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    plt.savefig(folder / 'E_knn_euclidean_proof.png', dpi=300, bbox_inches='tight')
+    print("✓ Proof table saved as 'E_knn_euclidean_proof.png'")
+    plt.close()
+
+    # Print summary to console
+    print("\n" + "=" * 60)
+    print("K-NN VS EUCLIDEAN COMPARISON (NEUTRAL WEIGHTS)")
+    print("=" * 60)
+    for _, row in df.iterrows():
+        diff = float(row['Absolute Difference'])
+        status = "✓ IDENTICAL" if diff < 0.0001 else "⚠ DIFFERENT"
+        print(f"{row['Metric']:20s} | Diff: {row['Absolute Difference']:10s} | {status}")
+    print("=" * 60)
+
 def plot_feature_weights(folder):
     """C. Plot the normalized feature weights as a table."""
     weights = {
@@ -209,7 +321,6 @@ def main():
         return
 
     # Merge dataframes to ensure metrics are aligned and only common metrics are used
-    # This prevents shape mismatches during plotting
     merged_df = pd.merge(neutral_df_raw, adjusted_df_raw, on='Metric', suffixes=('_neutral', '_adjusted'))
 
     # For operations that need separate dataframes, create them from the merged set
@@ -233,15 +344,16 @@ def main():
     ]
 
     # ============================================================================
-    # A-D. NEW PLOTS FOR PRESENTATION
+    # A-E. NEW PLOTS FOR PRESENTATION
     # ============================================================================
     print("\n" + "=" * 80)
     print("GENERATING NEW PRESENTATION PLOTS...")
     print("=" * 80)
     plot_neutral_euclidean_vs_manhattan(neutral_df, presentation_folder)
-    plot_manhattan_variations(neutral_df_raw, presentation_folder)  # Use raw neutral to get all variations
+    plot_manhattan_variations(neutral_df_raw, presentation_folder)
     plot_feature_weights(presentation_folder)
-    plot_adjusted_metrics_comparison(neutral_df_raw, adjusted_df_raw, presentation_folder)  # Use raw adjusted to get all variations
+    plot_adjusted_metrics_comparison(neutral_df_raw, adjusted_df_raw, presentation_folder)
+    prove_knn_euclidean_equivalence(neutral_df_raw, presentation_folder)  # ← MOVED HERE
     print("-" * 80)
 
     # ============================================================================
@@ -601,6 +713,7 @@ def main():
         f.write("   6. 6_average_performance.png - Average scores across methods\n")
         f.write("=" * 80 + "\n")
 
+    prove_knn_euclidean_equivalence(neutral_df, presentation_folder)
 
     print("\n" + "=" * 80)
     print("ALL PRESENTATION MATERIALS GENERATED SUCCESSFULLY!")
