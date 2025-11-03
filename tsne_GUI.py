@@ -17,6 +17,7 @@ class TSNEVisualizerGUI:
         
         # Initialize plot variables
         self.fig, self.ax = plt.subplots(figsize=(10, 8))
+        self.fig.tight_layout(pad=1.0)  # Reduce padding around the plot
         self.category_colors = {}
         self.category_visibility = {}
         self.scatter_plots = {}
@@ -209,23 +210,21 @@ class TSNEVisualizerGUI:
         self.category_scatter_plots = {}  # Reset scatter plot objects
         self.currently_highlighted_category = None
         
+        # Count visible categories to determine if we should use different shapes
+        visible_categories = [cat for cat, visible in self.category_visibility.items() if visible]
+        use_different_shapes = len(visible_categories) <= 5
+        
+        # Define shapes for different categories (when using shapes)
+        shapes = ['o', '^', 'D', 'v', 's']  # circle, square, triangle up, diamond, triangle down
+        
+        shape_index = 0
         for category in self.categories:
+            category_data = self.data[self.data['category'] == category]
+            
+            # Determine alpha based on visibility setting
             if self.category_visibility.get(category, True):
-                category_data = self.data[self.data['category'] == category]
-                
-                scatter = self.ax.scatter(
-                    category_data['x'], 
-                    category_data['y'],
-                    c=[self.category_colors[category]], 
-                    label=category,
-                    alpha=1.0,
-                    s=20
-                )
-                
-                # Store scatter plot object for this category
-                self.category_scatter_plots[category] = scatter
-                
-                # Store data for hover functionality
+                alpha = 1.0  # Full opacity for checked categories
+                # Store data for hover functionality (only for checked categories)
                 for _, row in category_data.iterrows():
                     self.visible_data_points.append({
                         'x': row['x'],
@@ -233,8 +232,32 @@ class TSNEVisualizerGUI:
                         'category': row['category'],
                         'object_name': row['object_name']
                     })
-                
                 visible_points += len(category_data)
+                
+                # Assign shape for this category if using different shapes
+                if use_different_shapes:
+                    marker = shapes[shape_index % len(shapes)]
+                    shape_index += 1
+                else:
+                    marker = 'o'  # Default circle
+            else:
+                alpha = 0.05  # Low opacity for unchecked categories
+                marker = 'o'  # Always use circles for unchecked categories
+            
+            scatter = self.ax.scatter(
+                category_data['x'], 
+                category_data['y'],
+                c=[self.category_colors[category]], 
+                label=category if self.category_visibility.get(category, True) else None,  # Only label checked categories
+                alpha=alpha,
+                s=20,
+                marker=marker,
+                edgecolors='black',
+                linewidths=0.3
+            )
+            
+            # Store scatter plot object for this category
+            self.category_scatter_plots[category] = scatter
         
         # Set fixed axis limits to keep the view consistent
         self.ax.set_xlim(self.x_min, self.x_max)
@@ -248,7 +271,7 @@ class TSNEVisualizerGUI:
         # Only show legend if there are visible categories and not too many
         visible_categories = sum(1 for v in self.category_visibility.values() if v)
         if visible_categories > 0 and visible_categories <= 15:
-            self.ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            self.ax.legend(loc='upper right')
         
         # Create hover annotation (initially invisible)
         self.hover_annotation = self.ax.annotate('', xy=(0,0), xytext=(20,20), 
@@ -257,6 +280,8 @@ class TSNEVisualizerGUI:
                                                arrowprops=dict(arrowstyle="->"))
         self.hover_annotation.set_visible(False)
         
+        # Apply tight layout to minimize white space
+        self.fig.tight_layout(pad=1.0)
         self.canvas.draw()
     
     def update_statistics(self):
@@ -283,20 +308,23 @@ class TSNEVisualizerGUI:
                 # Keep the target category at full opacity (100%)
                 scatter_plot.set_alpha(1.0)
             else:
-                # Make other categories 1% opacity
-                scatter_plot.set_alpha(0.01)
+                # Make other categories 5% opacity
+                scatter_plot.set_alpha(0.05)
         
         self.canvas.draw_idle()
     
     def reset_category_highlighting(self):
-        """Reset all categories to normal opacity"""
+        """Reset all categories to normal opacity based on their visibility setting"""
         if self.currently_highlighted_category is None:
             return  # Nothing to reset
         
         self.currently_highlighted_category = None
         
-        for scatter_plot in self.category_scatter_plots.values():
-            scatter_plot.set_alpha(1.0)  # Reset to full opacity
+        for category, scatter_plot in self.category_scatter_plots.items():
+            if self.category_visibility.get(category, True):
+                scatter_plot.set_alpha(1.0)  # Full opacity for checked categories
+            else:
+                scatter_plot.set_alpha(0.05)  # Low opacity for unchecked categories
         
         self.canvas.draw_idle()
     
@@ -309,32 +337,33 @@ class TSNEVisualizerGUI:
             self.reset_category_highlighting()
             return
         
-        # Find the closest point to the mouse cursor
+        # Find if mouse is directly on top of any scatter point
         if event.xdata is None or event.ydata is None:
             return
         
         closest_point = None
-        min_distance = float('inf')
-        hover_threshold = 0.02  # Adjust this to change hover sensitivity
         
-        # Calculate the threshold in data coordinates
-        x_range = self.x_max - self.x_min
-        y_range = self.y_max - self.y_min
-        threshold_x = x_range * hover_threshold
-        threshold_y = y_range * hover_threshold
-        
-        for point in self.visible_data_points:
-            # Calculate distance from mouse to point
-            dx = abs(event.xdata - point['x'])
-            dy = abs(event.ydata - point['y'])
-            
-            # Use a simple distance metric
-            distance = np.sqrt(dx**2 + dy**2)
-            
-            # Check if mouse is close enough to the point
-            if dx < threshold_x and dy < threshold_y and distance < min_distance:
-                min_distance = distance
-                closest_point = point
+        # Check each category's scatter plot to see if mouse is on top of any point
+        for category, scatter_plot in self.category_scatter_plots.items():
+            if self.category_visibility.get(category, True):  # Only check visible categories
+                # Check if mouse is directly on top of any point in this scatter plot
+                contains, info = scatter_plot.contains(event)
+                if contains:
+                    # Find which specific point was clicked
+                    point_indices = info['ind']
+                    if len(point_indices) > 0:
+                        # Get the first point that was hit
+                        point_idx = point_indices[0]
+                        category_data = self.data[self.data['category'] == category]
+                        point_data = category_data.iloc[point_idx]
+                        
+                        closest_point = {
+                            'x': point_data['x'],
+                            'y': point_data['y'],
+                            'category': point_data['category'],
+                            'object_name': point_data['object_name']
+                        }
+                        break  # Found a point, no need to check other categories
         
         if closest_point:
             # Highlight the category of the closest point
@@ -343,10 +372,12 @@ class TSNEVisualizerGUI:
             # Show annotation with category and object name
             self.hover_annotation.xy = (closest_point['x'], closest_point['y'])
             
-            # Clean up object name (remove file extension if present)
+            # Clean up object name (remove file extension and _rm suffix if present)
             object_name = closest_point['object_name']
             if object_name.endswith('.obj'):
                 object_name = object_name[:-4]
+            if object_name.endswith('_rm'):
+                object_name = object_name[:-3]
             
             text = f"Category: {closest_point['category']}\nObject: {object_name}"
             self.hover_annotation.set_text(text)
