@@ -352,11 +352,17 @@ def calculate_statistics(csv_path: str, k: int = None):
             map_matrix.append(map_row)
 
         # Calculate figure size based on content
-        fig_width = max(12, len(metrics) * 1.5)
-        fig_height = max(8, len(all_categories) * 0.5)
+        # For single metric, use smaller width; for multiple metrics, scale appropriately
+        if len(metrics) == 1:
+            fig_width = 10
+        else:
+            fig_width = max(12, int(len(metrics) * 2.5))
 
-        # Create single MAP heatmap with better layout
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+        # Height scales with number of categories (0.35 per category, min 12)
+        fig_height = max(12, int(len(all_categories) * 0.35))
+
+        # Create single MAP heatmap with better layout - use constrained_layout to prevent label cutoff
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
 
         # MAP heatmap with red-to-green color scheme
         # Low scores = red (bad), Medium = yellow, High scores = green (good)
@@ -365,8 +371,9 @@ def calculate_statistics(csv_path: str, k: int = None):
         # Set ticks and labels with better formatting
         ax.set_xticks(np.arange(len(metrics)))
         ax.set_yticks(np.arange(len(all_categories)))
-        ax.set_xticklabels(metrics, rotation=45, ha='right', fontsize=11)
-        ax.set_yticklabels(all_categories, fontsize=10)
+        ax.set_xticklabels(metrics, rotation=0 if len(metrics) == 1 else 45,
+                          ha='center' if len(metrics) == 1 else 'right', fontsize=12)
+        ax.set_yticklabels(all_categories, fontsize=9)
 
         # Add title and labels
         ax.set_title(f'Mean Average Precision (MAP) per Category\n{os.path.basename(csv_path)}',
@@ -384,7 +391,7 @@ def calculate_statistics(csv_path: str, k: int = None):
                 text = ax.text(j, i, f'{value:.3f}',
                               ha="center", va="center",
                               color=text_color,
-                              fontsize=9,
+                              fontsize=10,
                               fontweight='bold')
 
         # Add colorbar with better formatting
@@ -398,7 +405,7 @@ def calculate_statistics(csv_path: str, k: int = None):
         ax.grid(which="minor", color="gray", linestyle='-', linewidth=0.5)
         ax.tick_params(which="minor", size=0)
 
-        plt.tight_layout()
+        # Don't use tight_layout since we're using constrained_layout
         plt.show()
 
 if __name__ == '__main__':
@@ -406,7 +413,7 @@ if __name__ == '__main__':
 
     results_files = [
         'results_neutral.csv',
-        'results_adjusted.csv'
+        'results_weighted.csv'
     ]
 
     for file_path in results_files:
