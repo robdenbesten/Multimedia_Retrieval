@@ -315,10 +315,19 @@ def calculate_statistics(csv_path: str, k: int = None):
     for cat in unique_queries.values():
         category_counts[cat] += 1
 
+    # Find smallest category
+    min_cat = None
+    min_count = float('inf')
+    for cat, cnt in category_counts.items():
+        if cnt < min_count:
+            min_count = cnt
+            min_cat = cat
+
     print(f"\nDataset Overview:")
     print(f"  Total unique queries: {len(unique_queries)}")
     print(f"  Number of categories: {len(category_counts)}")
-    print(f"  Category sizes: {dict(category_counts)}\n")
+    print(f"  Category sizes: {dict(category_counts)}")
+    print(f"  Smallest category: {min_cat} with {min_count} items\n")
 
     # Group by metric
     metrics = sorted(list(set(row.get('metric', '').strip() for row in all_rows if row.get('metric', '').strip())))
@@ -454,10 +463,11 @@ def calculate_statistics(csv_path: str, k: int = None):
         plt.show()
 
 if __name__ == '__main__':
-    K_VALUE = None  # Set to integer for top-k evaluation, None for top-N
+
+    K_VALUE = 12  # Set to integer for top-k evaluation, None for top-N
 
     results_files = [
-        'results_neutral.csv',
+        'results_neutral2.csv',
         'results_weighted.csv'
     ]
 

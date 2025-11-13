@@ -22,15 +22,15 @@ def generate_retrieval_results_wide_format():
 
      # --- Configuration ---
      csv_path = 'Feature-matrix/all_features2.csv'
-     out_path = 'results_weighted.csv'
-     metrics = ['euclidean', 'manhattan', 'manhattan+chi-squared', 'manhattan+emd', 'manhattan+kullback-leibler']
+     out_path = 'results_neutral2.csv'
+     metrics = ['euclidean', 'manhattan', 'manhattan+chi-squared', 'manhattan+emd', 'manhattan+kullback-leibler', 'knn']
      # --- End of Configuration ---
 
      try:
          searcher = ShapeSearcher(
                 feature_csv_path=csv_path,
                 weights=MANUAL_WEIGHTS,
-                weighting_method = 'feature'  # or 'neutral'
+                weighting_method = 'neutral'  # or 'neutral'
             )
      except FileNotFoundError as e:
          print(f"Error: {e}", file=sys.stderr)

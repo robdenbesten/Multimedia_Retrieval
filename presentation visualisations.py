@@ -20,30 +20,24 @@ def plot_neutral_euclidean_vs_manhattan(neutral_df, folder):
         return
 
     f1_scores = df.set_index('Metric').loc[metrics_to_compare, 'Macro_F1']
-    map_scores = df.set_index('Metric').loc[metrics_to_compare, 'Macro_MAP']
 
-    x = np.arange(2)  # Two metrics: F1, MAP
-    width = 0.35
+    x = np.arange(len(metrics_to_compare))
+    width = 0.6
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars1 = ax.bar(x - width / 2, [f1_scores['euclidean'], map_scores['euclidean']], width, label='Euclidean',
-                   color='skyblue')
-    bars2 = ax.bar(x + width / 2, [f1_scores['manhattan'], map_scores['manhattan']], width, label='Manhattan',
-                   color='lightcoral')
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bars = ax.bar(x, f1_scores.values, width, color=['skyblue', 'lightcoral'])
 
-    ax.set_ylabel('Scores')
-    ax.set_title('Neutral Weights: Euclidean vs. Manhattan', fontweight='bold')
+    ax.set_ylabel('F1 Score')
+    ax.set_title('Neutral Weights: Euclidean vs. Manhattan (F1)', fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(['F1', 'MAP'])
-    ax.legend()
+    ax.set_xticklabels(['Euclidean', 'Manhattan'])
     ax.grid(axis='y', alpha=0.5)
-    ax.set_ylim(0, max(f1_scores.max(), map_scores.max()) * 1.15)
+    ax.set_ylim(0, f1_scores.max() * 1.15)
 
-    for bars in [bars1, bars2]:
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, height, f'{height:.3f}',
-                    ha='center', va='bottom')
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height, f'{height:.3f}',
+                ha='center', va='bottom')
 
     plt.tight_layout()
     plt.savefig(folder / 'A_neutral_euclidean_vs_manhattan.png', dpi=300)
@@ -62,29 +56,25 @@ def plot_manhattan_variations(neutral_df, folder):
     df = df.set_index('Metric').loc[metrics_to_compare]
 
     f1_scores = df['Macro_F1']
-    map_scores = df['Macro_MAP']
 
     labels = [label.replace('+', '\n+') for label in df.index]
     x = np.arange(len(labels))
-    width = 0.35
+    width = 0.6
 
-    fig, ax = plt.subplots(figsize=(12, 7))
-    bars1 = ax.bar(x - width / 2, f1_scores, width, label='F1', color='teal')
-    bars2 = ax.bar(x + width / 2, map_scores, width, label='MAP', color='orange')
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars = ax.bar(x, f1_scores, width, color='teal')
 
-    ax.set_ylabel('Scores')
-    ax.set_title('Neutral Weights Manhattan vs. Manhattan Variations', fontweight='bold')
+    ax.set_ylabel('F1 Score')
+    ax.set_title('Neutral Weights: Manhattan vs. Manhattan Variations (F1)', fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.legend()
     ax.grid(axis='y', alpha=0.5)
-    ax.set_ylim(0, max(f1_scores.max(), map_scores.max()) * 1.15)
+    ax.set_ylim(0, f1_scores.max() * 1.15)
 
-    for bars in [bars1, bars2]:
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, height, f'{height:.3f}',
-                    ha='center', va='bottom')
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height, f'{height:.3f}',
+                ha='center', va='bottom')
 
     plt.tight_layout()
     plt.savefig(folder / 'B_manhattan_variations.png', dpi=300)
@@ -383,9 +373,7 @@ def plot_weighted_results_table(folder):
 def plot_adjusted_metrics_comparison(neutral_df, adjusted_df, folder):
     """D. Plot comparison of neutral vs adjusted Manhattan and composite metrics.
 
-    Produces two subplots:
-      - Left: Macro F1 (neutral vs adjusted)
-      - Right: Macro MAP (neutral vs adjusted)
+    Shows only Macro F1 comparison.
     """
     metrics_to_compare = ['manhattan', 'manhattan+chi-squared', 'manhattan+emd', 'manhattan+kullback-leibler']
     df_neutral = neutral_df[neutral_df['Metric'].isin(metrics_to_compare)]
@@ -402,40 +390,23 @@ def plot_adjusted_metrics_comparison(neutral_df, adjusted_df, folder):
     x = np.arange(len(labels))
     width = 0.35
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=False)
-    ax_f1, ax_map = axes
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # --- Macro F1 comparison ---
-    bars_n = ax_f1.bar(x - width/2, df_neutral['Macro_F1'], width, label='Neutral', color='lightblue')
-    bars_a = ax_f1.bar(x + width/2, df_adjusted['Macro_F1'], width, label='Weighted', color='salmon')
-    ax_f1.set_title('F1 — Neutral vs Weighted', fontweight='bold')
-    ax_f1.set_xticks(x)
-    ax_f1.set_xticklabels(labels, fontsize=9)
-    ax_f1.set_ylabel('F1')
-    ax_f1.set_ylim(0, max(df_neutral['Macro_F1'].max(), df_adjusted['Macro_F1'].max()) * 1.15)
-    ax_f1.grid(axis='y', alpha=0.3)
-    ax_f1.legend()
+    bars_n = ax.bar(x - width/2, df_neutral['Macro_F1'], width, label='Neutral', color='lightblue')
+    bars_a = ax.bar(x + width/2, df_adjusted['Macro_F1'], width, label='Weighted', color='salmon')
+    ax.set_title('F1 — Neutral vs Weighted', fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel('F1 Score')
+    ax.set_ylim(0, max(df_neutral['Macro_F1'].max(), df_adjusted['Macro_F1'].max()) * 1.15)
+    ax.grid(axis='y', alpha=0.3)
+    ax.legend()
 
     # annotate
     for bar in list(bars_n) + list(bars_a):
         h = bar.get_height()
-        ax_f1.text(bar.get_x() + bar.get_width()/2, h, f'{h:.3f}', ha='center', va='bottom', fontsize=8)
-
-    # --- Macro MAP comparison ---
-    bars_n2 = ax_map.bar(x - width/2, df_neutral['Macro_MAP'], width, label='Neutral', color='lightgreen')
-    bars_a2 = ax_map.bar(x + width/2, df_adjusted['Macro_MAP'], width, label='Weighted', color='gold')
-    ax_map.set_title('MAP — Neutral vs Weighted', fontweight='bold')
-    ax_map.set_xticks(x)
-    ax_map.set_xticklabels(labels, fontsize=9)
-    ax_map.set_ylabel('MAP')
-    ax_map.set_ylim(0, max(df_neutral['Macro_MAP'].max(), df_adjusted['Macro_MAP'].max()) * 1.15)
-    ax_map.grid(axis='y', alpha=0.3)
-    ax_map.legend()
-
-    # annotate
-    for bar in list(bars_n2) + list(bars_a2):
-        h = bar.get_height()
-        ax_map.text(bar.get_x() + bar.get_width()/2, h, f'{h:.3f}', ha='center', va='bottom', fontsize=8)
+        ax.text(bar.get_x() + bar.get_width()/2, h, f'{h:.3f}', ha='center', va='bottom', fontsize=8)
 
     plt.tight_layout()
     plt.savefig(folder / 'D_adjusted_metrics_comparison.png', dpi=300)
