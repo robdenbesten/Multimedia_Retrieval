@@ -1,3 +1,12 @@
+"""
+EVALUATION METRICS
+This file measures how well the shape search system works.
+It calculates metrics like precision, recall, F1 score, and MAP (mean average precision).
+It creates ROC curves to visualize performance.
+It processes query results to see if similar shapes are found correctly.
+All categories are weighted equally for fair comparison.
+"""
+
 import csv
 import sys
 from collections import defaultdict
@@ -464,10 +473,10 @@ def calculate_statistics(csv_path: str, k: int = None):
 
 if __name__ == '__main__':
 
-    K_VALUE = 12  # Set to integer for top-k evaluation, None for top-N
+    K_VALUE = None  # Set to integer for top-k evaluation, None for top-N
 
     results_files = [
-        'results_neutral2.csv',
+        'results_neutral.csv',
         'results_weighted.csv'
     ]
 

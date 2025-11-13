@@ -1,3 +1,11 @@
+"""
+OBJECT COMPARISON UTILITY
+This file compares objects between different folders.
+It checks which shapes are in the normalized folder vs the original database.
+It finds missing objects and reports differences between folders.
+This helps verify that all shapes were processed correctly.
+"""
+
 import os
 from pathlib import Path
 from collections import defaultdict

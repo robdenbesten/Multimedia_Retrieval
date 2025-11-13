@@ -1,3 +1,11 @@
+"""
+BASIC NORMALIZATION (OLD VERSION)
+This is an early version of shape normalization.
+It centers shapes at the origin (0,0,0).
+It scales shapes to fit in a unit cube.
+This was later improved with flipping and better centering methods.
+"""
+
 
 import os
 import math

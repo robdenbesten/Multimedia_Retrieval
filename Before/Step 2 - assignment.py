@@ -1,3 +1,11 @@
+"""
+DATABASE ANALYZER (OLD VERSION)
+This file analyzes the original shape database.
+It counts vertices and faces in each shape.
+It identifies face types (triangles, quads, etc.).
+It creates reports and visualizations of database statistics.
+"""
+
 import os
 import pandas as pd
 import matplotlib.pyplot as plt

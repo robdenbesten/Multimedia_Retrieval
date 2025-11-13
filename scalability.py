@@ -1,3 +1,12 @@
+"""
+T-SNE VISUALIZATION
+This file creates 2D visualizations of high-dimensional shape data.
+It uses t-SNE to reduce many features down to 2 dimensions for plotting.
+It creates scatter plots where similar shapes appear close together.
+Different categories are shown in different colors.
+This helps visualize how well shapes are grouped by category.
+"""
+
 import os
 import pandas as pd
 import numpy as np
@@ -48,7 +57,7 @@ def save_full_tsne_map(features_df, X_2d, output_filename):
 
 
 if __name__ == '__main__':
-    csv_file = 'Feature-matrix/all_features_modified.csv'
+    csv_file = 'Feature-matrix/all_features.csv'
 
     if not os.path.exists(csv_file):
         raise FileNotFoundError(f"`{csv_file}` not found. Ensure the CSV file is in the directory.")
@@ -76,4 +85,4 @@ if __name__ == '__main__':
     X_2d = compute_tsne(X_scaled, perplexity=perplexity_val, max_iter=100000)
 
     # 4. Save the full t-SNE map to a file
-    save_full_tsne_map(all_features_df, X_2d, 'tsne_full_map.png')
+    save_full_tsne_map(all_features_df, X_2d, 'plots/tsne_full_map.png')

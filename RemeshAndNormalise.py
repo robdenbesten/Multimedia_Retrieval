@@ -1,3 +1,12 @@
+"""
+MESH REMESHING AND NORMALIZATION
+This file prepares 3D shapes for comparison by standardizing them.
+It remeshes objects to have exactly 5000 vertices (points).
+It normalizes shapes by centering them at the origin and scaling to unit size.
+It also flips shapes to have consistent orientation.
+This makes all shapes comparable regardless of their original size or position.
+"""
+
 import os
 import numpy as np
 import pymeshlab as ml

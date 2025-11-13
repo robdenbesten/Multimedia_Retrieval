@@ -1,10 +1,18 @@
+"""
+WEIGHT OPTIMIZATION TOOL
+This file helps find the best weights for different features.
+It tests different weight combinations and measures performance.
+It calculates average precision for query results.
+It can process large datasets in parallel for faster testing.
+"""
+
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed  # <-- add ThreadPoolExecutor
 import os
 
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
+from Querying import ShapeSearcher, MANUAL_WEIGHTS
 
 def calculate_average_precision(query_category: str, result_labels: List[str], total_relevant: int) -> float:
     """
@@ -159,7 +167,7 @@ def evaluate_performance(
 
 
 if __name__ == '__main__':
-    CSV_FILE = 'Feature-matrix/all_features_modified.csv'
+    CSV_FILE = '../../Feature-matrix/OldFeatureSets/all_features_modified.csv'
     METRIC_TO_TEST = 'manhattan'
 
     # 1. Evaluate with your custom manual weights on a sample

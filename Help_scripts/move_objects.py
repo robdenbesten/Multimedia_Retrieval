@@ -1,3 +1,11 @@
+"""
+OBJECT ORGANIZER
+This file moves objects between folders based on their status.
+It finds excluded objects and moves their original versions too.
+It maintains folder structure when moving files.
+This keeps the database organized and consistent.
+"""
+
 import os
 import shutil
 from pathlib import Path

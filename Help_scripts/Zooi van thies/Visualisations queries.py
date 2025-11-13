@@ -1,3 +1,11 @@
+"""
+QUERY RESULTS VISUALIZER
+This file creates a grid view showing query results visually.
+It displays the query shape and its most similar matches.
+It shows multiple results at once in an organized layout.
+This helps evaluate search quality by seeing actual 3D shapes.
+"""
+
 # python
 import sys
 import os
@@ -9,8 +17,8 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load
 
 # Import from your existing project files
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
-from viewerRob import DATABASE_LOCATION, FEATURE_CSV
+from Querying import ShapeSearcher, MANUAL_WEIGHTS
+from Main import DATABASE_LOCATION, FEATURE_CSV
 
 # Define the location of the normalized objects used for displaying results
 NORMALIZED_DB_LOCATION = r'Normalised-objects'

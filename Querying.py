@@ -1,3 +1,12 @@
+"""
+SHAPE SEARCH ENGINE
+This file finds similar 3D shapes based on their features.
+It uses different distance measures (Euclidean, Manhattan, Chi-squared, etc.) to compare shapes.
+It applies weights to different features to prioritize important characteristics.
+It can use KNN (k-nearest neighbors) to quickly find the most similar shapes.
+The search results are ranked by similarity from most to least similar.
+"""
+
 import os
 import numpy as np
 import pandas as pd

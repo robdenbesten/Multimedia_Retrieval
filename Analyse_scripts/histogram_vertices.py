@@ -1,3 +1,11 @@
+"""
+VERTEX DISTRIBUTION PLOTTER
+This file creates histograms showing how vertices are distributed across shapes.
+It reads vertex counts from CSV files.
+It creates bar charts with bins to visualize the distribution.
+This helps understand if shapes are properly standardized.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np

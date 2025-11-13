@@ -1,3 +1,11 @@
+"""
+ADVANCED NORMALIZATION WITH FLIPPING (OLD VERSION)
+This version adds orientation correction to normalization.
+It detects if shapes are flipped and corrects their orientation.
+It uses PCA (principal component analysis) to find the main axes.
+It creates histograms to analyze shape alignment before and after.
+"""
+
 # python
 import os
 import math

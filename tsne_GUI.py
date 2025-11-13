@@ -1,3 +1,12 @@
+"""
+INTERACTIVE T-SNE VIEWER
+This file creates an interactive window to explore t-SNE visualizations.
+You can toggle categories on/off to see specific groups of shapes.
+You can hover over points to see which shape they represent.
+You can highlight specific categories to focus on them.
+This makes it easy to explore and understand the shape database visually.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -53,7 +62,7 @@ class TSNEVisualizerGUI:
     def load_data(self):
         """Load the t-SNE data from CSV file"""
         try:
-            self.data = pd.read_csv('tsne_plot_data.csv')
+            self.data = pd.read_csv('plots/tsne_plot_data.csv')
             self.categories = sorted(self.data['category'].unique())
             print(f"Loaded {len(self.data)} data points with {len(self.categories)} categories")
         except FileNotFoundError:

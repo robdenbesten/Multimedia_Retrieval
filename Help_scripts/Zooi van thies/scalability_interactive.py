@@ -1,3 +1,11 @@
+"""
+INTERACTIVE T-SNE DATA EXPORTER
+This file creates t-SNE visualizations and saves them in multiple formats.
+It generates 2D embeddings of shape features for visualization.
+It exports data as CSV and JSON for use in interactive tools.
+This creates the data files used by the t-SNE GUI viewer.
+"""
+
 import os
 import pandas as pd
 import numpy as np
@@ -76,7 +84,7 @@ def save_full_tsne_map(features_df, X_2d, output_filename):
 
 
 if __name__ == '__main__':
-    csv_file = 'Feature-matrix/all_features_modified.csv'
+    csv_file = '../../Feature-matrix/OldFeatureSets/all_features_modified.csv'
 
     if not os.path.exists(csv_file):
         raise FileNotFoundError(f"`{csv_file}` not found. Ensure the CSV file is in the directory.")

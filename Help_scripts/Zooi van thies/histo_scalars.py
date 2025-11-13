@@ -1,9 +1,17 @@
+"""
+SCALAR FEATURE VISUALIZER
+This file creates plots comparing scalar features across different shapes.
+It shows how features like sphericity, convexity, etc. differ between shapes.
+It highlights specific example shapes (round, flat, elongated, irregular).
+This helps understand what the scalar features actually measure.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
 # --- Configuration ---
-CSV_FILE_PATH = 'Feature-matrix/all_features2.csv'  # <-- IMPORTANT: Update with the path to your CSV file
+CSV_FILE_PATH = '../../Feature-matrix/all_features.csv'  # <-- IMPORTANT: Update with the path to your CSV file
 SCALARS_TO_PLOT = [
     'Surface area', 'Sphericity', 'Rectangularity',
     'Diameter', 'Convexity', 'Eccentricity'

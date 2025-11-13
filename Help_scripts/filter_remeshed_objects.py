@@ -1,3 +1,11 @@
+"""
+MESH QUALITY FILTER
+This file filters out shapes that didn't remesh properly.
+It checks if objects have the correct number of vertices (between 4000-10000).
+It moves bad objects to an excluded folder.
+This ensures only properly processed shapes are used in the database.
+"""
+
 import os
 import shutil
 import pymeshlab as ml

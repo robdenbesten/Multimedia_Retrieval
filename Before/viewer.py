@@ -1,3 +1,11 @@
+"""
+MESH VIEWER WITH FEATURES (OLD VERSION)
+This is an earlier version of the main viewer application.
+It shows 3D shapes and their extracted features.
+It displays histograms and scalar properties.
+This was the prototype for the current Main.py application.
+"""
+
 import sys
 import os
 import shutil
@@ -215,7 +223,7 @@ class MeshViewer(QMainWindow):
             feature_filename = os.path.splitext(os.path.basename(self.normalized_file))[0] + '_features.csv'
             out_path = os.path.join(TEMP_OUTPUT_DIR, feature_filename)
             
-            # Settings matching all_features.csv generation
+            # Settings matching featuresOld.csv generation
             n_samples = 250000
             surface_points = 5000
             
@@ -230,7 +238,7 @@ class MeshViewer(QMainWindow):
             )
             
             if success and isinstance(result, list):
-                # Create CSV header matching all_features.csv
+                # Create CSV header matching featuresOld.csv
                 metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
                               "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
                 header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]

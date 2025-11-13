@@ -1,3 +1,11 @@
+"""
+VERTEX COUNTER
+This file counts how many vertices (points) each 3D shape has.
+It handles different file formats (starting with 'm' or 'D').
+It scans folders and saves vertex counts to CSV files.
+This helps analyze the quality of the database.
+"""
+
 import os
 import re
 from pathlib import Path

@@ -1,3 +1,11 @@
+"""
+CUSTOM VIEWER VERSION
+This is a customized version of the main viewer application.
+It may have different features or settings for testing purposes.
+It provides similar functionality to Main.py with some variations.
+This was likely used for specific experiments or demonstrations.
+"""
+
 # python
 import sys
 import os
@@ -15,11 +23,11 @@ from normalise import Mesh
 from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 # Import the comparison algorithm components
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
+from Querying import ShapeSearcher, MANUAL_WEIGHTS
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
-FEATURE_CSV = 'Feature-matrix/all_features.csv'  # Path to your main feature database
+FEATURE_CSV = 'Feature-matrix/featuresOld.csv'  # Path to your main feature database
 
 
 class MeshViewer(QMainWindow):

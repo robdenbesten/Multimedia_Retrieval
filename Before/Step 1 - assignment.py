@@ -1,3 +1,11 @@
+"""
+BASIC 3D VIEWER (OLD VERSION)
+This is an early version of the 3D shape viewer.
+It lets you browse folders and view 3D objects.
+It shows bounding boxes around shapes.
+This was a starting point before the full application was built.
+"""
+
 import sys
 import os
 from PyQt6.QtWidgets import QApplication, QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QLabel, QCheckBox, QComboBox

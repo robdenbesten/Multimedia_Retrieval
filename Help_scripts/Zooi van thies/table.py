@@ -1,3 +1,11 @@
+"""
+RESULTS TABLE GENERATOR
+This file creates formatted tables showing performance metrics.
+It highlights best values in green and worst values in red.
+It uses color coding to make results easy to understand.
+The tables are publication-ready for reports and presentations.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np

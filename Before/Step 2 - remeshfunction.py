@@ -1,3 +1,11 @@
+"""
+REMESHING FUNCTION (OLD VERSION)
+This is an early version of the remeshing algorithm.
+It adjusts vertex count to reach a target number (5000).
+It uses subdivision to add vertices or decimation to remove them.
+This was refined and improved in the final RemeshAndNormalise.py file.
+"""
+
 import os
 import shutil
 import pymeshlab as ml

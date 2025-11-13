@@ -1,3 +1,12 @@
+"""
+FEATURE EXTRACTION
+This file extracts numerical features from 3D shapes.
+It creates histograms (D1, D2, D3, D4, A3) that describe shape geometry.
+It also calculates scalar values like surface area, sphericity, and convexity.
+These features are used to compare shapes and find similar objects.
+The file can process many shapes at once and save results to a CSV file.
+"""
+
 import os
 import math
 import hashlib
@@ -358,7 +367,7 @@ def extract_features_for_all_meshes(
         header += [f'{k}_bin_{i}' for i in range(n_bins)]
 
     os.makedirs(features_dir, exist_ok=True)
-    out_csv = os.path.join(features_dir, 'all_features2.csv')
+    out_csv = os.path.join(features_dir, 'all_features.csv')
 
     work_total = len(tasks)
     print(f'Processing {work_total} meshes with {max_workers} workers...')

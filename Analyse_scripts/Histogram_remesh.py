@@ -1,3 +1,11 @@
+"""
+NORMALIZED MESH ANALYZER
+This file analyzes the normalized object database.
+It counts vertices in all normalized shapes.
+It creates reports showing distribution across categories.
+This verifies that the normalization process worked correctly.
+"""
+
 import os
 import csv
 import glob

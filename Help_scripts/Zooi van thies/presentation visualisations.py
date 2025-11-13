@@ -1,3 +1,11 @@
+"""
+PRESENTATION PLOTS GENERATOR
+This file creates publication-quality plots for presentations and reports.
+It compares different distance metrics (Euclidean, Manhattan, variations).
+It generates bar charts showing F1 scores and other performance metrics.
+The plots are designed to clearly show which methods work best.
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -415,7 +423,7 @@ def plot_adjusted_metrics_comparison(neutral_df, adjusted_df, folder):
 
 def main():
     # Create presentation folder
-    presentation_folder = Path("Presentation_Results")
+    presentation_folder = Path("../../Presentation_Results")
     presentation_folder.mkdir(exist_ok=True)
 
     # Load the data

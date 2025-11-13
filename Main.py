@@ -1,3 +1,12 @@
+"""
+MAIN VIEWER APPLICATION
+This is the main 3D shape viewer application with a graphical interface.
+It lets you browse and view 3D objects from different categories.
+You can see the original shape or a normalized version (standardized size and position).
+The app also shows shape features like histograms and scalar properties.
+You can search for similar shapes using different comparison methods.
+"""
+
 import sys
 import os
 import shutil
@@ -15,15 +24,15 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vedo import Plotter, load, Line, Axes
 
 # Import the Mesh class and feature extraction
-from normalise import Mesh
+from RemeshAndNormalise import Mesh
 from feature_extraction import extract_features_for_single_mesh, make_fixed_bin_edges, DEFAULT_BINS
 
 # Import the comparison algorithm components
-from Comparison_algorithm import ShapeSearcher, MANUAL_WEIGHTS
+from Querying import ShapeSearcher, MANUAL_WEIGHTS
 
 DATABASE_LOCATION = r'ShapeDatabase_INFOMR-master\Original Database'
 TEMP_OUTPUT_DIR = 'TEMP_OUTPUT'
-FEATURE_CSV = 'Feature-matrix/all_features_modified.csv'  # Path to your main feature database
+FEATURE_CSV = 'Feature-matrix/all_features.csv'  # Path to your main feature database
 
 
 class MeshViewer(QMainWindow):
@@ -538,7 +547,7 @@ class MeshViewer(QMainWindow):
             feature_filename = os.path.splitext(os.path.basename(self.normalized_file))[0] + '_features.csv'
             out_path = os.path.join(TEMP_OUTPUT_DIR, feature_filename)
             
-            # Settings matching all_features.csv generation
+            # Settings matching featuresOld.csv generation
             n_samples = 250000
             surface_points = 5000
             
@@ -553,7 +562,7 @@ class MeshViewer(QMainWindow):
             )
             
             if success and isinstance(result, list):
-                # Create CSV header matching all_features.csv
+                # Create CSV header matching featuresOld.csv
                 metric_keys = ["Mesh volume", "Surface area", "Diameter", "Compactness",
                               "Rectangularity", "Convexity", "Eccentricity", "Sphericity"]
                 header = ["Object", "Category"] + metric_keys + ["extents_0", "extents_1", "extents_2"]
