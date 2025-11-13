@@ -38,23 +38,26 @@ To set up the environment and run the application, please follow the instruction
 ### For Windows Command Prompt (`cmd.exe`):
 
 1. **Navigate to the correct project folder**
+    ```cmd
+    cd Foldername
+    ```
 
-2.  **Create a virtual environment:**
+3.  **Create a virtual environment:**
     ```cmd
     python -m venv venv
     ```
 
-3.  **Activate the virtual environment:**
+4.  **Activate the virtual environment:**
     ```cmd
     venv\Scripts\activate.bat
     ```
 
-4.  **Install the required packages:**
+5.  **Install the required packages:**
     ```cmd
     pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
     ```
 
-5.  **Run the application:**
+6.  **Run the application:**
     ```cmd
     python Main.py
     ```
