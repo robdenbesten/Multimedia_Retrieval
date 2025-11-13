@@ -33,7 +33,7 @@ typing, concurrent.futures
 
 ## Setup and Usage
 
-To set up the environment and run the application, please follow the instructions below for your preferred command-line interface.
+To set up the environment and run the application, please follow the instructions below.
 
 ### For Windows Command Prompt (`cmd.exe`):
 
