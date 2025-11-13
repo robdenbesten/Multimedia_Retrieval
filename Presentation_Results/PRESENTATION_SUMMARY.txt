@@ -1,0 +1,71 @@
+================================================================================
+MULTIMEDIA RETRIEVAL: NEUTRAL VS ADJUSTED WEIGHTS ANALYSIS
+================================================================================
+
+KEY FINDINGS:
+--------------------------------------------------------------------------------
+
+1. OVERALL PERFORMANCE IMPROVEMENT (ON COMMON METRICS):
+
+   Macro_Precision          : -22.53%
+   Macro_Recall             : +94.40%
+   Macro_F1                 : +35.91%
+   Macro_MAP                : -77.02%
+   Macro_First_Tier         :  +7.92%
+   Micro_Precision          : -17.37%
+   Micro_Recall             : +248.26%
+   ROC_AUC                  :  +0.00%
+   Accuracy                 :  -0.89%
+
+
+2. BEST PERFORMING METHODS:
+
+   NEUTRAL WEIGHTS:
+   - Method: manhattan
+   - Macro F1: 0.1446
+   - Macro MAP: 0.4896
+   - ROC AUC: 0.0000
+
+   ADJUSTED WEIGHTS:
+   - Method: manhattan
+   - Macro F1: 0.1954
+   - Macro MAP: 0.1187
+   - ROC AUC: 0.5553
+
+
+3. BIGGEST IMPROVEMENTS BY DISTANCE METRIC:
+
+   euclidean                     : +31.95% (F1: 0.1233 → 0.1627)
+   manhattan                     : +35.13% (F1: 0.1446 → 0.1954)
+   manhattan+chi-squared         : +45.37% (F1: 0.1296 → 0.1884)
+   manhattan+emd                 : +29.19% (F1: 0.1295 → 0.1673)
+   manhattan+kullback-leibler    : +37.69% (F1: 0.1377 → 0.1896)
+
+
+4. STATISTICAL SUMMARY:
+
+   Number of Queries: 2413
+   Number of Categories: 69
+   Distance Metrics Tested: 5
+
+
+5. KEY RECOMMENDATIONS:
+
+   - Use ADJUSTED WEIGHTS for better retrieval performance
+   - Best overall method: manhattan
+   - Average improvement across all metrics: +29.86%
+
+================================================================================
+VISUALIZATION FILES GENERATED:
+--------------------------------------------------------------------------------
+   • A_neutral_euclidean_vs_manhattan.png - Comparison of neutral Euclidean and Manhattan.
+   • B_manhattan_variations.png - Comparison of neutral and adjusted Manhattan metrics.
+   • C_feature_weights.png - Overview of normalized feature weights.
+   • D_adjusted_metrics_comparison.png - Comparison of all adjusted metrics.
+   1. 1_overall_performance_comparison.png - Bar charts of all metrics
+   2. 2_improvement_heatmap.png - Percentage improvements heatmap
+   3. 3_best_performers.png - Best methods comparison
+   4. 4_radar_comparison.png - Radar charts for all methods
+   5. 5_summary_table.png - Detailed comparison table
+   6. 6_average_performance.png - Average scores across methods
+================================================================================
