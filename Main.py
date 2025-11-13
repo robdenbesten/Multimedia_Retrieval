@@ -50,6 +50,7 @@ class MeshViewer(QMainWindow):
         self.result_plotters = []
         self.result_labels = []  # Store result labels for dissimilarity display
         self.current_features = None  # Store current mesh features
+        self.origin_axes = None  # Initialize axes reference
 
         self.init_searcher()
         self.init_ui()
@@ -222,28 +223,29 @@ class MeshViewer(QMainWindow):
     
     def add_axes(self):
         """Add coordinate axes to the viewer with labels and real values"""
-        # Create axes with vedo's Axes class for proper labeling
-        from vedo import Axes
+        try:
+            # Create axes object with real-world scale
+            # The axes will auto-adjust to the mesh bounds when a mesh is loaded
+            # Vedo Axes uses xrange, yrange, zrange tuples and xtitle, ytitle, ztitle for labels
+            self.axes_object = Axes(
+                xrange=(-0.5, 0.5),
+                yrange=(-0.5, 0.5),
+                zrange=(-0.5, 0.5),
+                xtitle='X',
+                ytitle='Y',
+                ztitle='Z',
+                text_scale=1.2,
+                c='black',
+            )
 
-        # Create axes object with real-world scale
-        # The axes will auto-adjust to the mesh bounds when a mesh is loaded
-        # Vedo Axes uses xrange, yrange, zrange tuples and xtitle, ytitle, ztitle for labels
-        self.axes_object = Axes(
-            xrange=(-0.5, 0.5),
-            yrange=(-0.5, 0.5),
-            zrange=(-0.5, 0.5),
-            xtitle='X',
-            ytitle='Y',
-            ztitle='Z',
-            text_scale=1.2,
-            c='black',
-        )
+            # Store reference
+            self.origin_axes = self.axes_object
 
-        # Store reference
-        self.origin_axes = self.axes_object
-
-        # Add to plotter
-        self.plotter.add(self.axes_object)
+            # Add to plotter
+            self.plotter.add(self.axes_object)
+        except Exception as e:
+            print(f"Warning: Could not create axes: {e}")
+            self.origin_axes = None
 
     def load_categories(self):
         """Load all category folders from the database"""
@@ -394,7 +396,8 @@ class MeshViewer(QMainWindow):
             original_object_name = os.path.basename(self.current_file)
             base_name = os.path.splitext(original_object_name)[0]
             normalized_object_name = f"{base_name}_rm.obj"
-            query_label = os.path.join(category, normalized_object_name).replace('\\', '/')
+            # Use forward slashes for consistency with feature database
+            query_label = f"{category}/{normalized_object_name}"
 
             # Get features from the searcher's database
             if self.searcher and query_label in self.searcher.features_df.index:
@@ -473,8 +476,9 @@ class MeshViewer(QMainWindow):
         # Original: "m1337.obj" -> Normalized: "m1337_rm.obj"
         base_name = os.path.splitext(original_object_name)[0]
         normalized_object_name = f"{base_name}_rm.obj"
-        query_label = os.path.join(category, normalized_object_name).replace('\\', '/')
-        
+        # Use forward slashes for consistency with feature database
+        query_label = f"{category}/{normalized_object_name}"
+
         metric = self.metric_dropdown.currentText()
 
         self.status_label.setText(f"Searching for similar shapes to {original_object_name}...")
@@ -611,6 +615,13 @@ class MeshViewer(QMainWindow):
         except Exception as e:
             print(f'Error cleaning up {TEMP_OUTPUT_DIR}: {e}')
         finally:
+            # Clean up VTK widgets properly
+            try:
+                self.plotter.close()
+                for plotter in self.result_plotters:
+                    plotter.close()
+            except:
+                pass
             event.accept()
 
 
