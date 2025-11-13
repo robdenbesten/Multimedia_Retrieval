@@ -54,7 +54,7 @@ To set up the environment and run the application, please follow the instruction
 
 5.  **Install the required packages:**
     ```cmd
-    pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
+    pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk scipy
     ```
 
 6.  **Run the application:**
