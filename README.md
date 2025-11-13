@@ -31,26 +31,58 @@ os, sys, csv, math, hashlib, collections, re
 typing, concurrent.futures
 ```
 
-### Installation
+## Setup and Usage
 
-Install all required packages with pip:
+To set up the environment and run the application, please follow the instructions below for your preferred command-line interface.
 
-```bash
-pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
-```
+### For Windows Command Prompt (`cmd.exe`):
 
----
+1.  **Create a virtual environment:**
+    ```cmd
+    python -m venv venv
+    ```
 
+2.  **Activate the virtual environment:**
+    ```cmd
+    venv\Scripts\activate.bat
+    ```
 
-## Quick Start
+3.  **Install the required packages:**
+    ```cmd
+    pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
+    ```
 
-### Running the Main Application
+4.  **Run the application:**
+    ```cmd
+    python Main.py
+    ```
 
-Simply run the main viewer:
+### For Windows PowerShell:
 
-```bash
-python Main.py
-```
+1.  **Create a virtual environment:**
+    ```powershell
+    python -m venv venv
+    ```
+
+2.  **Activate the virtual environment:**
+    ```powershell
+    .\venv\Scripts\Activate.ps1
+    ```
+    *Note: If you encounter an error about script execution, you may need to run the following command first:*
+    ```powershell
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+    ```
+
+3.  **Install the required packages:**
+    ```powershell
+    pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
+    ```
+
+4.  **Run the application:**
+    ```powershell
+    python Main.py
+    ```
+
 
 This opens a graphical interface where you can:
 - Browse 3D shapes by category
@@ -249,6 +281,8 @@ Multimedia_Retrieval/
 │
 └── plots/                          # Generated visualizations
 ```
+
+
 
 
 
