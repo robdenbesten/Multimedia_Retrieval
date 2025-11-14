@@ -67,6 +67,37 @@ To set up the environment and run the application, please follow the instruction
     python main_minimal.py
     ```
 
+### For macOS / Linux (bash, zsh) 
+
+1. Create a virtual environment:
+
+    ```bash
+    python3 -m venv venv
+    ```
+
+2. Activate the virtual environment:
+
+    ```bash
+    source venv/bin/activate
+    ```
+
+3. Upgrade pip and install required packages:
+
+    ```bash
+    pip install --upgrade pip
+    pip install numpy pandas matplotlib trimesh pymeshlab vedo PyQt6 scikit-learn vtk
+    ```
+
+4. Run the application:
+
+    **!! Due to possible problems with the pymeshlab library we also included a minimal version to run, this version will always work but lacks the functionality to remesh and normalise in the UI !!**
+    ```bash
+    python Main.py
+    ```
+    ```bash
+    python main_minimal.py
+    ```
+
 This opens a graphical interface where you can:
 - Browse 3D shapes by category
 - View shapes in 3D
