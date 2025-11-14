@@ -58,8 +58,13 @@ To set up the environment and run the application, please follow the instruction
     ```
 
 6.  **Run the application:**
+
+    **!! Due to possible problems with the pymeshlab library we also included a minimal version to run, this version will always work but lacks the functionality to remesh and normalise in the UI !!**
     ```cmd
     python Main.py
+    ```
+    ```cmd
+    python main_minimal.py
     ```
 
 This opens a graphical interface where you can:
